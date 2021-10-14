@@ -15,12 +15,14 @@ unset(CMAKE_CSharp_COMPILER_WORKS CACHE)
 set(test_compile_file "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testCSharpCompiler.cs")
 
 # This file is used by EnableLanguage in cmGlobalGenerator to
-# determine that that selected C# compiler can actually compile
+# determine that the selected C# compiler can actually compile
 # and link the most basic of programs. If not, a fatal error
 # is set and cmake stops processing commands and will not generate
 # any makefiles or projects.
 if(NOT CMAKE_CSharp_COMPILER_WORKS)
-  PrintTestCompilerStatus("C#" "${CMAKE_CSharp_COMPILER}")
+  # Don't call PrintTestCompilerStatus() because the "C#" we want to pass
+  # as the LANG doesn't match with the variable name "CMAKE_CSharp_COMPILER"
+  message(CHECK_START "Check for working C# compiler: ${CMAKE_CSharp_COMPILER}")
   file(WRITE "${test_compile_file}"
     "namespace Test {"
     "   public class CSharp {"
@@ -28,6 +30,9 @@ if(NOT CMAKE_CSharp_COMPILER_WORKS)
     "   }"
     "}"
     )
+  # Clear result from normal variable.
+  unset(CMAKE_CSharp_COMPILER_WORKS)
+  # Puts test result in cache variable.
   try_compile(CMAKE_CSharp_COMPILER_WORKS ${CMAKE_BINARY_DIR} "${test_compile_file}"
     OUTPUT_VARIABLE __CMAKE_CSharp_COMPILER_OUTPUT
     )
@@ -38,7 +43,7 @@ if(NOT CMAKE_CSharp_COMPILER_WORKS)
 endif()
 
 if(NOT CMAKE_CSharp_COMPILER_WORKS)
-  PrintTestCompilerStatus("C#" "${CMAKE_CSharp_COMPILER} -- broken")
+  PrintTestCompilerResult(CHECK_FAIL "broken")
   file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
     "Determining if the C# compiler works failed with "
     "the following output:\n${__CMAKE_CSharp_COMPILER_OUTPUT}\n\n")
@@ -49,7 +54,7 @@ if(NOT CMAKE_CSharp_COMPILER_WORKS)
     "CMake will not be able to correctly generate this project.")
 else()
   if(CSharp_TEST_WAS_RUN)
-    PrintTestCompilerStatus("C#" "${CMAKE_CSharp_COMPILER} -- works")
+    PrintTestCompilerResult(CHECK_PASS "works")
     file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
       "Determining if the C# compiler works passed with "
       "the following output:\n${__CMAKE_CSharp_COMPILER_OUTPUT}\n\n")

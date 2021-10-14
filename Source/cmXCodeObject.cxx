@@ -2,8 +2,9 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmXCodeObject.h"
 
-#include <CoreFoundation/CoreFoundation.h>
 #include <ostream>
+
+#include <CoreFoundation/CoreFoundation.h>
 
 #include "cmSystemTools.h"
 
@@ -39,7 +40,7 @@ cmXCodeObject::~cmXCodeObject()
   this->Version = 15;
 }
 
-cmXCodeObject::cmXCodeObject(PBXType ptype, Type type)
+cmXCodeObject::cmXCodeObject(PBXType ptype, Type type, std::string id)
 {
   this->Version = 15;
   this->Target = nullptr;
@@ -47,27 +48,7 @@ cmXCodeObject::cmXCodeObject(PBXType ptype, Type type)
 
   this->IsA = ptype;
 
-  if (type == OBJECT) {
-    // Set the Id of an Xcode object to a unique string for each instance.
-    // However the Xcode user file references certain Ids: for those cases,
-    // override the generated Id using SetId().
-    //
-    char cUuid[40] = { 0 };
-    CFUUIDRef uuid = CFUUIDCreate(kCFAllocatorDefault);
-    CFStringRef s = CFUUIDCreateString(kCFAllocatorDefault, uuid);
-    CFStringGetCString(s, cUuid, sizeof(cUuid), kCFStringEncodingUTF8);
-    this->Id = cUuid;
-    CFRelease(s);
-    CFRelease(uuid);
-  } else {
-    this->Id =
-      "Temporary cmake object, should not be referred to in Xcode file";
-  }
-
-  cmSystemTools::ReplaceString(this->Id, "-", "");
-  if (this->Id.size() > 24) {
-    this->Id = this->Id.substr(0, 24);
-  }
+  this->Id = std::move(id);
 
   this->TypeValue = type;
   if (this->TypeValue == OBJECT) {
@@ -115,16 +96,15 @@ void cmXCodeObject::Print(std::ostream& out)
   if (separator == "\n") {
     out << separator;
   }
-  std::map<std::string, cmXCodeObject*>::iterator i;
   cmXCodeObject::Indent(3 * indentFactor, out);
   out << "isa = " << PBXTypeNames[this->IsA] << ";" << separator;
-  for (i = this->ObjectAttributes.begin(); i != this->ObjectAttributes.end();
-       ++i) {
-    if (i->first == "isa") {
+  for (const auto& keyVal : this->ObjectAttributes) {
+    if (keyVal.first == "isa") {
       continue;
     }
 
-    PrintAttribute(out, 3, separator, indentFactor, i->first, i->second, this);
+    PrintAttribute(out, 3, separator, indentFactor, keyVal.first,
+                   keyVal.second, this);
   }
   cmXCodeObject::Indent(2 * indentFactor, out);
   out << "};\n";
@@ -167,11 +147,9 @@ void cmXCodeObject::PrintAttribute(std::ostream& out, int level,
       if (separator == "\n") {
         out << separator;
       }
-      std::map<std::string, cmXCodeObject*>::const_iterator i;
-      for (i = object->ObjectAttributes.begin();
-           i != object->ObjectAttributes.end(); ++i) {
-        PrintAttribute(out, (level + 1) * factor, separator, factor, i->first,
-                       i->second, object);
+      for (const auto& keyVal : object->ObjectAttributes) {
+        PrintAttribute(out, (level + 1) * factor, separator, factor,
+                       keyVal.first, keyVal.second, object);
       }
       cmXCodeObject::Indent(level * factor, out);
       out << "};" << separator;
@@ -221,7 +199,7 @@ void cmXCodeObject::CopyAttributes(cmXCodeObject* copy)
   this->Object = copy->Object;
 }
 
-void cmXCodeObject::PrintString(std::ostream& os, std::string String)
+void cmXCodeObject::PrintString(std::ostream& os, const std::string& String)
 {
   // The string needs to be quoted if it contains any characters
   // considered special by the Xcode project file parser.
@@ -234,13 +212,12 @@ void cmXCodeObject::PrintString(std::ostream& os, std::string String)
 
   // Print the string, quoted and escaped as necessary.
   os << quote;
-  for (std::string::const_iterator i = String.begin(); i != String.end();
-       ++i) {
-    if (*i == '"' || *i == '\\') {
+  for (auto c : String) {
+    if (c == '"' || c == '\\') {
       // Escape double-quotes and backslashes.
       os << '\\';
     }
-    os << *i;
+    os << c;
   }
   os << quote;
 }

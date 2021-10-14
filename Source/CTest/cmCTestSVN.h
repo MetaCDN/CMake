@@ -1,15 +1,15 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmCTestSVN_h
-#define cmCTestSVN_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
-#include "cmCTestGlobalVC.h"
-
 #include <iosfwd>
+#include <list>
 #include <string>
 #include <vector>
+
+#include "cmCTestGlobalVC.h"
 
 class cmCTest;
 class cmXMLWriter;
@@ -40,7 +40,7 @@ private:
   struct SVNInfo
   {
 
-    SVNInfo(const char* path)
+    SVNInfo(std::string const& path = std::string())
       : LocalPath(path)
     {
     }
@@ -70,7 +70,8 @@ private:
   friend struct Revision;
 
   // Info of all the repositories (root, externals and nested ones).
-  std::vector<SVNInfo> Repositories;
+  // Use std::list so the elements don't move in memory.
+  std::list<SVNInfo> Repositories;
 
   // Pointer to the infos of the root repository.
   SVNInfo* RootInfo;
@@ -101,5 +102,3 @@ private:
   friend class UpdateParser;
   friend class ExternalParser;
 };
-
-#endif

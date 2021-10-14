@@ -1,7 +1,6 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmCPackGenerator_h
-#define cmCPackGenerator_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
@@ -10,10 +9,14 @@
 #include <string>
 #include <vector>
 
+#include "cm_sys_stat.h"
+
 #include "cmCPackComponentGroup.h"
 #include "cmSystemTools.h"
+#include "cmValue.h"
 
 class cmCPackLog;
+class cmGlobalGenerator;
 class cmInstalledFile;
 class cmMakefile;
 
@@ -33,6 +36,16 @@ public:
     this->GeneratorVerbose =
       val ? cmSystemTools::OUTPUT_MERGE : cmSystemTools::OUTPUT_NONE;
   }
+
+  /**
+   * Put underlying cmake scripts in trace mode.
+   */
+  void SetTrace(bool val) { this->Trace = val; }
+
+  /**
+   * Put underlying cmake scripts in expanded trace mode.
+   */
+  void SetTraceExpand(bool val) { this->TraceExpand = val; }
 
   /**
    * Returns true if the generator may work on this system.
@@ -72,8 +85,18 @@ public:
 
   //! Set and get the options
   void SetOption(const std::string& op, const char* value);
+  void SetOption(const std::string& op, const std::string& value)
+  {
+    this->SetOption(op, cmValue(value));
+  }
+  void SetOption(const std::string& op, cmValue value);
   void SetOptionIfNotSet(const std::string& op, const char* value);
-  const char* GetOption(const std::string& op) const;
+  void SetOptionIfNotSet(const std::string& op, const std::string& value)
+  {
+    this->SetOptionIfNotSet(op, cmValue(value));
+  }
+  void SetOptionIfNotSet(const std::string& op, cmValue value);
+  cmValue GetOption(const std::string& op) const;
   std::vector<std::string> GetOptions() const;
   bool IsSet(const std::string& name) const;
   bool IsOn(const std::string& name) const;
@@ -84,7 +107,7 @@ public:
   void SetLogger(cmCPackLog* log) { this->Logger = log; }
 
   //! Display verbose information via logger
-  void DisplayVerboseOutput(const char* msg, float progress);
+  void DisplayVerboseOutput(const std::string& msg, float progress);
 
   bool ReadListFile(const char* moduleName);
 
@@ -157,7 +180,8 @@ protected:
   virtual const char* GetPackagingInstallPrefix();
 
   virtual std::string FindTemplate(const char* name);
-  virtual bool ConfigureFile(const char* inName, const char* outName,
+  virtual bool ConfigureFile(const std::string& inName,
+                             const std::string& outName,
                              bool copyOnly = false);
   virtual bool ConfigureString(const std::string& input, std::string& output);
   virtual int InitializeInternal();
@@ -168,9 +192,22 @@ protected:
   virtual int InstallProjectViaInstallScript(
     bool setDestDir, const std::string& tempInstallDirectory);
   virtual int InstallProjectViaInstalledDirectories(
-    bool setDestDir, const std::string& tempInstallDirectory);
+    bool setDestDir, const std::string& tempInstallDirectory,
+    const mode_t* default_dir_mode);
   virtual int InstallProjectViaInstallCMakeProjects(
-    bool setDestDir, const std::string& tempInstallDirectory);
+    bool setDestDir, const std::string& tempInstallDirectory,
+    const mode_t* default_dir_mode);
+
+  virtual int RunPreinstallTarget(const std::string& installProjectName,
+                                  const std::string& installDirectory,
+                                  cmGlobalGenerator* globalGenerator,
+                                  const std::string& buildConfig);
+  virtual int InstallCMakeProject(
+    bool setDestDir, const std::string& installDirectory,
+    const std::string& baseTempInstallDirectory,
+    const mode_t* default_dir_mode, const std::string& component,
+    bool componentInstall, const std::string& installSubDirectory,
+    const std::string& buildConfig, std::string& absoluteDestFiles);
 
   /**
    * The various level of support of
@@ -258,6 +295,7 @@ protected:
    */
   std::vector<std::string> files;
 
+  std::vector<cmCPackInstallCMakeProject> CMakeProjects;
   std::map<std::string, cmCPackInstallationType> InstallationTypes;
   /**
    * The set of components.
@@ -292,13 +330,20 @@ protected:
   ComponentPackageMethod componentPackageMethod;
 
   cmCPackLog* Logger;
+  bool Trace;
+  bool TraceExpand;
+
+  cmMakefile* MakefileMap;
 
 private:
-  cmMakefile* MakefileMap;
+  template <typename ValueType>
+  void StoreOption(const std::string& op, ValueType value);
+  template <typename ValueType>
+  void StoreOptionIfNotSet(const std::string& op, ValueType value);
 };
 
 #define cmCPackTypeMacro(klass, superclass)                                   \
-  typedef superclass Superclass;                                              \
+  using Superclass = superclass;                                              \
   const char* GetNameOfClass() override { return #klass; }                    \
   static cmCPackGenerator* CreateGenerator() { return new klass; }            \
   class cmCPackTypeMacro_UseTrailingSemicolon
@@ -310,5 +355,3 @@ private:
     this->Logger->Log(logType, __FILE__, __LINE__,                            \
                       cmCPackLog_msg.str().c_str());                          \
   } while (false)
-
-#endif

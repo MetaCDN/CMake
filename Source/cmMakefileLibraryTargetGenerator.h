@@ -1,13 +1,13 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmMakefileLibraryTargetGenerator_h
-#define cmMakefileLibraryTargetGenerator_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
-#include "cmMakefileTargetGenerator.h"
-
 #include <string>
+#include <vector>
+
+#include "cmMakefileTargetGenerator.h"
 
 class cmGeneratorTarget;
 
@@ -27,8 +27,11 @@ protected:
   void WriteSharedLibraryRules(bool relink);
   void WriteModuleLibraryRules(bool relink);
 
-  void WriteDeviceLibraryRules(const std::string& linkRule,
-                               const std::string& extraFlags, bool relink);
+  void WriteDeviceLibraryRules(const std::string& linkRule, bool relink);
+  void WriteNvidiaDeviceLibraryRules(const std::string& linkRuleVar,
+                                     bool relink,
+                                     std::vector<std::string>& commands,
+                                     const std::string& targetOutput);
   void WriteLibraryRules(const std::string& linkRule,
                          const std::string& extraFlags, bool relink);
   // MacOSX Framework support methods
@@ -40,5 +43,3 @@ protected:
 private:
   std::string DeviceLinkObject;
 };
-
-#endif

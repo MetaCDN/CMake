@@ -2,23 +2,27 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCPackSTGZGenerator.h"
 
-#include "cmsys/FStream.hxx"
+#include <cstdio>
 #include <sstream>
-#include <stdio.h>
 #include <string>
+#include <vector>
 
+#include "cmsys/FStream.hxx"
+
+#include "cm_sys_stat.h"
+
+#include "cmArchiveWrite.h"
 #include "cmCPackGenerator.h"
 #include "cmCPackLog.h"
 #include "cmSystemTools.h"
-#include "cm_sys_stat.h"
+#include "cmValue.h"
 
 cmCPackSTGZGenerator::cmCPackSTGZGenerator()
+  : cmCPackArchiveGenerator(cmArchiveWrite::CompressGZip, "paxr", ".sh")
 {
 }
 
-cmCPackSTGZGenerator::~cmCPackSTGZGenerator()
-{
-}
+cmCPackSTGZGenerator::~cmCPackSTGZGenerator() = default;
 
 int cmCPackSTGZGenerator::InitializeInternal()
 {
@@ -30,7 +34,7 @@ int cmCPackSTGZGenerator::InitializeInternal()
                   "Cannot find template file: " << inFile << std::endl);
     return 0;
   }
-  this->SetOptionIfNotSet("CPACK_STGZ_HEADER_FILE", inFile.c_str());
+  this->SetOptionIfNotSet("CPACK_STGZ_HEADER_FILE", inFile);
   this->SetOptionIfNotSet("CPACK_AT_SIGN", "@");
 
   return this->Superclass::InitializeInternal();
@@ -47,16 +51,17 @@ int cmCPackSTGZGenerator::PackageFiles()
    * have generated several packages (component packaging)
    * so we must iterate over generated packages.
    */
-  for (std::string const& pfn : packageFileNames) {
-    retval &= cmSystemTools::SetPermissions(pfn.c_str(),
+  for (std::string const& pfn : this->packageFileNames) {
+    retval &= static_cast<bool>(
+      cmSystemTools::SetPermissions(pfn.c_str(),
 #if defined(_MSC_VER) || defined(__MINGW32__)
-                                            S_IREAD | S_IWRITE | S_IEXEC
+                                    S_IREAD | S_IWRITE | S_IEXEC
 #else
-                                            S_IRUSR | S_IWUSR | S_IXUSR |
-                                              S_IRGRP | S_IWGRP | S_IXGRP |
-                                              S_IROTH | S_IWOTH | S_IXOTH
+                                    S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP |
+                                      S_IWGRP | S_IXGRP | S_IROTH | S_IWOTH |
+                                      S_IXOTH
 #endif
-                                            );
+                                    ));
   }
   return retval;
 }
@@ -74,8 +79,7 @@ int cmCPackSTGZGenerator::GenerateHeader(std::ostream* os)
   while (cmSystemTools::GetLineFromStream(ilfs, line)) {
     licenseText += line + "\n";
   }
-  this->SetOptionIfNotSet("CPACK_RESOURCE_FILE_LICENSE_CONTENT",
-                          licenseText.c_str());
+  this->SetOptionIfNotSet("CPACK_RESOURCE_FILE_LICENSE_CONTENT", licenseText);
 
   const char headerLengthTag[] = "###CPACK_HEADER_LENGTH###";
 
@@ -100,8 +104,8 @@ int cmCPackSTGZGenerator::GenerateHeader(std::ostream* os)
     ++ptr;
   }
   counter++;
-  cmCPackLogger(cmCPackLog::LOG_DEBUG, "Number of lines: " << counter
-                                                           << std::endl);
+  cmCPackLogger(cmCPackLog::LOG_DEBUG,
+                "Number of lines: " << counter << std::endl);
   char buffer[1024];
   sprintf(buffer, "%d", counter);
   cmSystemTools::ReplaceString(res, headerLengthTag, buffer);

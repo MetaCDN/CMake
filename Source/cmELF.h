@@ -1,18 +1,15 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmELF_h
-#define cmELF_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
+#include <cstdint>
 #include <iosfwd>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
-
-#if !defined(CMAKE_USE_ELF_PARSER)
-#error "This file may be included only if CMAKE_USE_ELF_PARSER is enabled."
-#endif
 
 class cmELFInternal;
 
@@ -28,11 +25,14 @@ public:
   /** Destruct.   */
   ~cmELF();
 
+  cmELF(const cmELF&) = delete;
+  cmELF& operator=(const cmELF&) = delete;
+
   /** Get the error message if any.  */
   std::string const& GetErrorMessage() const { return this->ErrorMessage; }
 
   /** Boolean conversion.  True if the ELF file is valid.  */
-  operator bool() const { return this->Valid(); }
+  explicit operator bool() const { return this->Valid(); }
 
   /** Enumeration of ELF file types.  */
   enum FileType
@@ -64,10 +64,13 @@ public:
   };
 
   /** Represent entire dynamic section header */
-  typedef std::vector<std::pair<long, unsigned long>> DynamicEntryList;
+  using DynamicEntryList = std::vector<std::pair<long, unsigned long>>;
 
   /** Get the type of the file opened.  */
   FileType GetFileType() const;
+
+  /** Get the machine of the file opened.  */
+  std::uint16_t GetMachine() const;
 
   /** Get the number of ELF sections present.  */
   unsigned int GetNumberOfSections() const;
@@ -95,6 +98,9 @@ public:
   /** Get the RUNPATH field if any.  */
   StringEntry const* GetRunPath();
 
+  /** Returns true if the ELF file targets a MIPS CPU.  */
+  bool IsMIPS() const;
+
   /** Print human-readable information about the ELF file.  */
   void PrintInfo(std::ostream& os) const;
 
@@ -105,8 +111,6 @@ public:
 private:
   friend class cmELFInternal;
   bool Valid() const;
-  cmELFInternal* Internal;
+  std::unique_ptr<cmELFInternal> Internal;
   std::string ErrorMessage;
 };
-
-#endif

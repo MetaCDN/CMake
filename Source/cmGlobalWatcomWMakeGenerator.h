@@ -1,15 +1,16 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmGlobalWatcomWMakeGenerator_h
-#define cmGlobalWatcomWMakeGenerator_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
-#include "cmGlobalGeneratorFactory.h"
-#include "cmGlobalUnixMakefileGenerator3.h"
-
+#include <iosfwd>
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "cmGlobalGeneratorFactory.h"
+#include "cmGlobalUnixMakefileGenerator3.h"
 
 class cmMakefile;
 class cmake;
@@ -24,11 +25,12 @@ class cmGlobalWatcomWMakeGenerator : public cmGlobalUnixMakefileGenerator3
 {
 public:
   cmGlobalWatcomWMakeGenerator(cmake* cm);
-  static cmGlobalGeneratorFactory* NewFactory()
+  static std::unique_ptr<cmGlobalGeneratorFactory> NewFactory()
   {
-    return new cmGlobalGeneratorSimpleFactory<cmGlobalWatcomWMakeGenerator>();
+    return std::unique_ptr<cmGlobalGeneratorFactory>(
+      new cmGlobalGeneratorSimpleFactory<cmGlobalWatcomWMakeGenerator>());
   }
-  ///! Get the name for the generator.
+  //! Get the name for the generator.
   std::string GetName() const override
   {
     return cmGlobalWatcomWMakeGenerator::GetActualName();
@@ -37,6 +39,9 @@ public:
 
   /** Get the documentation entry for this generator.  */
   static void GetDocumentation(cmDocumentationEntry& entry);
+
+  /** Tell the generator about the target system.  */
+  bool SetSystemName(std::string const& s, cmMakefile* mf) override;
 
   /**
    * Try to determine system information such as shared library
@@ -47,6 +52,14 @@ public:
 
   bool AllowNotParallel() const override { return false; }
   bool AllowDeleteOnError() const override { return false; }
-};
 
-#endif
+protected:
+  std::vector<GeneratedMakeCommand> GenerateBuildCommand(
+    const std::string& makeProgram, const std::string& projectName,
+    const std::string& projectDir, std::vector<std::string> const& targetNames,
+    const std::string& config, bool fast, int jobs, bool verbose,
+    std::vector<std::string> const& makeOptions =
+      std::vector<std::string>()) override;
+
+  void PrintBuildCommandAdvice(std::ostream& os, int jobs) const override;
+};

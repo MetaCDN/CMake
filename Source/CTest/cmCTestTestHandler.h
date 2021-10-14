@@ -1,22 +1,29 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cmCTestTestHandler_h
-#define cmCTestTestHandler_h
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
-#include "cmCTestGenericHandler.h"
-
-#include "cmsys/RegularExpression.hxx"
+#include <chrono>
+#include <cstdint>
 #include <iosfwd>
 #include <map>
 #include <set>
-#include <stddef.h>
 #include <string>
 #include <utility>
 #include <vector>
 
-class cmCTest;
+#include <stddef.h>
+
+#include "cmsys/RegularExpression.hxx"
+
+#include "cmCTest.h"
+#include "cmCTestGenericHandler.h"
+#include "cmCTestResourceSpec.h"
+#include "cmDuration.h"
+#include "cmListFileCache.h"
+#include "cmValue.h"
+
 class cmMakefile;
 class cmXMLWriter;
 
@@ -28,10 +35,9 @@ class cmCTestTestHandler : public cmCTestGenericHandler
 {
   friend class cmCTestRunTest;
   friend class cmCTestMultiProcessHandler;
-  friend class cmCTestBatchTestHandler;
 
 public:
-  typedef cmCTestGenericHandler Superclass;
+  using Superclass = cmCTestGenericHandler;
 
   /**
    * The main entry point for this class
@@ -39,7 +45,7 @@ public:
   int ProcessHandler() override;
 
   /**
-   * When both -R and -I are used should te resulting test list be the
+   * When both -R and -I are used should the resulting test list be the
    * intersection or the union of the lists. By default it is the
    * intersection.
    */
@@ -56,12 +62,12 @@ public:
    */
   void PopulateCustomVectors(cmMakefile* mf) override;
 
-  ///! Control the use of the regular expresisons, call these methods to turn
+  //! Control the use of the regular expresisons, call these methods to turn
   /// them on
   void UseIncludeRegExp();
   void UseExcludeRegExp();
-  void SetIncludeRegExp(const char*);
-  void SetExcludeRegExp(const char*);
+  void SetIncludeRegExp(const std::string&);
+  void SetExcludeRegExp(const std::string&);
 
   void SetMaxIndex(int n) { this->MaxIndex = n; }
   int GetMaxIndex() { return this->MaxIndex; }
@@ -75,8 +81,8 @@ public:
     this->CustomMaximumFailedTestOutputSize = n;
   }
 
-  ///! pass the -I argument down
-  void SetTestsToRunInformation(const char*);
+  //! pass the -I argument down
+  void SetTestsToRunInformation(cmValue);
 
   cmCTestTestHandler();
 
@@ -97,6 +103,16 @@ public:
 
   void Initialize() override;
 
+  struct cmCTestTestResourceRequirement
+  {
+    std::string ResourceType;
+    int SlotsNeeded;
+    int UnitsNeeded;
+
+    bool operator==(const cmCTestTestResourceRequirement& other) const;
+    bool operator!=(const cmCTestTestResourceRequirement& other) const;
+  };
+
   // NOTE: This struct is Saved/Restored
   // in cmCTestTestHandler, if you add to this class
   // then you must add the new members to that code or
@@ -115,6 +131,8 @@ public:
     std::vector<std::pair<cmsys::RegularExpression, std::string>>
       RequiredRegularExpressions;
     std::vector<std::pair<cmsys::RegularExpression, std::string>>
+      SkipRegularExpressions;
+    std::vector<std::pair<cmsys::RegularExpression, std::string>>
       TimeoutRegularExpressions;
     std::map<std::string, std::string> Measurements;
     bool IsInBasedOnREOptions;
@@ -123,21 +141,27 @@ public:
     float Cost;
     int PreviousRuns;
     bool RunSerial;
-    double Timeout;
+    cmDuration Timeout;
     bool ExplicitTimeout;
-    double AlternateTimeout;
+    cmDuration AlternateTimeout;
     int Index;
     // Requested number of process slots
     int Processors;
+    bool WantAffinity;
+    std::vector<size_t> Affinity;
     // return code of test which will mark test as "not run"
     int SkipReturnCode;
     std::vector<std::string> Environment;
+    std::vector<std::string> EnvironmentModification;
     std::vector<std::string> Labels;
     std::set<std::string> LockedResources;
     std::set<std::string> FixturesSetup;
     std::set<std::string> FixturesCleanup;
     std::set<std::string> FixturesRequired;
     std::set<std::string> RequireSuccessDepends;
+    std::vector<std::vector<cmCTestTestResourceRequirement>> ResourceGroups;
+    // Private test generator properties used to track backtraces
+    cmListFileBacktrace Backtrace;
   };
 
   struct cmCTestTestResult
@@ -146,14 +170,16 @@ public:
     std::string Path;
     std::string Reason;
     std::string FullCommandLine;
-    double ExecutionTime;
-    int ReturnValue;
+    std::string Environment;
+    cmDuration ExecutionTime;
+    std::int64_t ReturnValue;
     int Status;
     std::string ExceptionStatus;
     bool CompressOutput;
     std::string CompletionStatus;
+    std::string CustomCompletionStatus;
     std::string Output;
-    std::string DartString;
+    std::string TestMeasurementsOutput;
     int TestCount;
     cmCTestTestProperties* Properties;
   };
@@ -174,19 +200,39 @@ public:
                                 std::string filepath, std::string& filename);
 
   // full signature static method to find an executable
-  static std::string FindExecutable(cmCTest* ctest, const char* testCommand,
+  static std::string FindExecutable(cmCTest* ctest,
+                                    const std::string& testCommand,
                                     std::string& resultingConfig,
                                     std::vector<std::string>& extraPaths,
                                     std::vector<std::string>& failed);
 
-  typedef std::vector<cmCTestTestProperties> ListOfTests;
+  static bool ParseResourceGroupsProperty(
+    const std::string& val,
+    std::vector<std::vector<cmCTestTestResourceRequirement>>& resourceGroups);
+
+  using ListOfTests = std::vector<cmCTestTestProperties>;
+
+  // Support for writing test results in JUnit XML format.
+  void SetJUnitXMLFileName(const std::string& id);
 
 protected:
+  using SetOfTests =
+    std::set<cmCTestTestHandler::cmCTestTestResult, cmCTestTestResultLess>;
+
   // compute a final test list
   virtual int PreProcessHandler();
   virtual int PostProcessHandler();
   virtual void GenerateTestCommand(std::vector<std::string>& args, int test);
   int ExecuteCommands(std::vector<std::string>& vec);
+
+  bool ProcessOptions();
+  void LogTestSummary(const std::vector<std::string>& passed,
+                      const std::vector<std::string>& failed,
+                      const cmDuration& durationInSecs);
+  void LogDisabledTests(const std::vector<cmCTestTestResult>& disabledTests);
+  void LogFailedTests(const std::vector<std::string>& failed,
+                      const SetOfTests& resultsSet);
+  bool GenerateXML();
 
   void WriteTestResultHeader(cmXMLWriter& xml,
                              cmCTestTestResult const& result);
@@ -194,20 +240,22 @@ protected:
                              cmCTestTestResult const& result);
   // Write attached test files into the xml
   void AttachFiles(cmXMLWriter& xml, cmCTestTestResult& result);
+  void AttachFile(cmXMLWriter& xml, std::string const& file,
+                  std::string const& name);
 
   //! Clean test output to specified length
-  bool CleanTestOutput(std::string& output, size_t length);
+  void CleanTestOutput(std::string& output, size_t length);
 
-  double ElapsedTestingTime;
+  cmDuration ElapsedTestingTime;
 
-  typedef std::vector<cmCTestTestResult> TestResultsVector;
+  using TestResultsVector = std::vector<cmCTestTestResult>;
   TestResultsVector TestResults;
 
   std::vector<std::string> CustomTestsIgnore;
   std::string StartTest;
   std::string EndTest;
-  unsigned int StartTestTime;
-  unsigned int EndTestTime;
+  std::chrono::system_clock::time_point StartTestTime;
+  std::chrono::system_clock::time_point EndTestTime;
   bool MemCheck;
   int CustomMaximumPassedTestOutputSize;
   int CustomMaximumFailedTestOutputSize;
@@ -230,25 +278,30 @@ public:
 
 private:
   /**
-   * Generate the Dart compatible output
+   * Write test results in CTest's Test.xml format
    */
-  virtual void GenerateDartOutput(cmXMLWriter& xml);
+  virtual void GenerateCTestXML(cmXMLWriter& xml);
+
+  /**
+   * Write test results in JUnit XML format
+   */
+  bool WriteJUnitXML();
 
   void PrintLabelOrSubprojectSummary(bool isSubProject);
 
   /**
    * Run the tests for a directory and any subdirectories
    */
-  void ProcessDirectory(std::vector<std::string>& passed,
+  bool ProcessDirectory(std::vector<std::string>& passed,
                         std::vector<std::string>& failed);
 
   /**
    * Get the list of tests in directory and subdirectories.
    */
-  void GetListOfTests();
+  bool GetListOfTests();
   // compute the lists of tests that will actually run
   // based on union regex and -I stuff
-  void ComputeTestList();
+  bool ComputeTestList();
 
   // compute the lists of tests that will actually run
   // based on LastTestFailed.log
@@ -269,9 +322,9 @@ private:
   /**
    * Find the executable for a test
    */
-  std::string FindTheExecutable(const char* exe);
+  std::string FindTheExecutable(const std::string& exe);
 
-  const char* GetTestStatus(cmCTestTestResult const&);
+  std::string GetTestStatus(cmCTestTestResult const&);
   void ExpandTestsToRunInformation(size_t numPossibleTests);
   void ExpandTestsToRunInformationForRerunFailed();
 
@@ -280,25 +333,24 @@ private:
 
   std::vector<int> TestsToRun;
 
-  bool UseIncludeLabelRegExpFlag;
-  bool UseExcludeLabelRegExpFlag;
   bool UseIncludeRegExpFlag;
   bool UseExcludeRegExpFlag;
   bool UseExcludeRegExpFirst;
-  std::string IncludeLabelRegExp;
-  std::string ExcludeLabelRegExp;
   std::string IncludeRegExp;
   std::string ExcludeRegExp;
   std::string ExcludeFixtureRegExp;
   std::string ExcludeFixtureSetupRegExp;
   std::string ExcludeFixtureCleanupRegExp;
-  cmsys::RegularExpression IncludeLabelRegularExpression;
-  cmsys::RegularExpression ExcludeLabelRegularExpression;
+  std::vector<cmsys::RegularExpression> IncludeLabelRegularExpressions;
+  std::vector<cmsys::RegularExpression> ExcludeLabelRegularExpressions;
   cmsys::RegularExpression IncludeTestsRegularExpression;
   cmsys::RegularExpression ExcludeTestsRegularExpression;
 
-  void GenerateRegressionImages(cmXMLWriter& xml, const std::string& dart);
-  cmsys::RegularExpression DartStuff1;
+  bool UseResourceSpec;
+  cmCTestResourceSpec ResourceSpec;
+  std::string ResourceSpecFile;
+
+  void RecordCustomTestMeasurements(cmXMLWriter& xml, std::string content);
   void CheckLabelFilter(cmCTestTestProperties& it);
   void CheckLabelFilterExclude(cmCTestTestProperties& it);
   void CheckLabelFilterInclude(cmCTestTestProperties& it);
@@ -307,11 +359,16 @@ private:
   bool UseUnion;
   ListOfTests TestList;
   size_t TotalNumberOfTests;
-  cmsys::RegularExpression DartStuff;
+  cmsys::RegularExpression AllTestMeasurementsRegex;
+  cmsys::RegularExpression SingleTestMeasurementRegex;
+  cmsys::RegularExpression CustomCompletionStatusRegex;
+  cmsys::RegularExpression CustomLabelRegex;
 
   std::ostream* LogFile;
 
+  cmCTest::Repeat RepeatMode = cmCTest::Repeat::Never;
+  int RepeatCount = 1;
   bool RerunFailed;
-};
 
-#endif
+  std::string JUnitXMLFileName;
+};

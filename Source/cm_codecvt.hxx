@@ -1,12 +1,11 @@
 /* Distributed under the OSI-approved BSD 3-Clause License.  See accompanying
    file Copyright.txt or https://cmake.org/licensing for details.  */
-#ifndef cm_codecvt_hxx
-#define cm_codecvt_hxx
+#pragma once
 
 #include "cmConfigure.h" // IWYU pragma: keep
 
+#include <cwchar>
 #include <locale>
-#include <wchar.h>
 
 class codecvt : public std::codecvt<char, char, mbstate_t>
 {
@@ -15,10 +14,11 @@ public:
   {
     None,
     UTF8,
+    UTF8_WITH_BOM,
     ANSI
   };
 
-#ifdef CMAKE_BUILD_WITH_CMAKE
+#ifndef CMAKE_BOOTSTRAP
 
   codecvt(Encoding e);
 
@@ -52,15 +52,13 @@ private:
   };
 
   bool m_noconv;
-#if defined(_WIN32)
+#  if defined(_WIN32)
   unsigned int m_codepage;
   result Decode(mbstate_t& state, int need, const char*& from_next,
                 char*& to_next, char* to_end) const;
   result DecodePartial(mbstate_t& state, char*& to_next, char* to_end) const;
   void BufferPartial(mbstate_t& state, int need, const char*& from_next) const;
-#endif
+#  endif
 
 #endif
 };
-
-#endif

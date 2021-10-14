@@ -2,19 +2,23 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCPackPackageMakerGenerator.h"
 
-#include "cmsys/FStream.hxx"
-#include "cmsys/RegularExpression.hxx"
-#include <assert.h>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <sstream>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string>
+
+#include "cmsys/FStream.hxx"
+#include "cmsys/RegularExpression.hxx"
 
 #include "cmCPackComponentGroup.h"
 #include "cmCPackLog.h"
+#include "cmDuration.h"
 #include "cmGeneratedFileStream.h"
+#include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
+#include "cmValue.h"
 #include "cmXMLWriter.h"
 
 static inline unsigned int getVersion(unsigned int major, unsigned int minor)
@@ -29,9 +33,7 @@ cmCPackPackageMakerGenerator::cmCPackPackageMakerGenerator()
   this->PackageCompatibilityVersion = getVersion(10, 4);
 }
 
-cmCPackPackageMakerGenerator::~cmCPackPackageMakerGenerator()
-{
-}
+cmCPackPackageMakerGenerator::~cmCPackPackageMakerGenerator() = default;
 
 bool cmCPackPackageMakerGenerator::SupportsComponentInstallation() const
 {
@@ -48,8 +50,8 @@ int cmCPackPackageMakerGenerator::PackageFiles()
     this->GetOption("CPACK_TEMPORARY_DIRECTORY");
   if (this->Components.empty()) {
     packageDirFileName += ".pkg";
-    resDir = this->GetOption("CPACK_TOPLEVEL_DIRECTORY");
-    resDir += "/Resources";
+    resDir =
+      cmStrCat(this->GetOption("CPACK_TOPLEVEL_DIRECTORY"), "/Resources");
   } else {
     packageDirFileName += ".mpkg";
     if (!cmsys::SystemTools::MakeDirectory(packageDirFileName.c_str())) {
@@ -59,8 +61,7 @@ int cmCPackPackageMakerGenerator::PackageFiles()
       return 0;
     }
 
-    resDir = packageDirFileName;
-    resDir += "/Contents";
+    resDir = cmStrCat(packageDirFileName, "/Contents");
     if (!cmsys::SystemTools::MakeDirectory(resDir.c_str())) {
       cmCPackLogger(cmCPackLog::LOG_ERROR,
                     "unable to create package subdirectory " << resDir
@@ -79,9 +80,9 @@ int cmCPackPackageMakerGenerator::PackageFiles()
     resDir += "/en.lproj";
   }
 
-  const char* preflight = this->GetOption("CPACK_PREFLIGHT_SCRIPT");
-  const char* postflight = this->GetOption("CPACK_POSTFLIGHT_SCRIPT");
-  const char* postupgrade = this->GetOption("CPACK_POSTUPGRADE_SCRIPT");
+  cmValue preflight = this->GetOption("CPACK_PREFLIGHT_SCRIPT");
+  cmValue postflight = this->GetOption("CPACK_POSTFLIGHT_SCRIPT");
+  cmValue postupgrade = this->GetOption("CPACK_POSTUPGRADE_SCRIPT");
 
   if (this->Components.empty()) {
     // Create directory structure
@@ -156,8 +157,8 @@ int cmCPackPackageMakerGenerator::PackageFiles()
 
   if (!this->Components.empty()) {
     // Create the directory where component packages will be built.
-    std::string basePackageDir = packageDirFileName;
-    basePackageDir += "/Contents/Packages";
+    std::string basePackageDir =
+      cmStrCat(packageDirFileName, "/Contents/Packages");
     if (!cmsys::SystemTools::MakeDirectory(basePackageDir.c_str())) {
       cmCPackLogger(cmCPackLog::LOG_ERROR,
                     "Problem creating component packages directory: "
@@ -167,14 +168,13 @@ int cmCPackPackageMakerGenerator::PackageFiles()
 
     // Create the directory where downloaded component packages will
     // be placed.
-    const char* userUploadDirectory =
-      this->GetOption("CPACK_UPLOAD_DIRECTORY");
+    cmValue userUploadDirectory = this->GetOption("CPACK_UPLOAD_DIRECTORY");
     std::string uploadDirectory;
-    if (userUploadDirectory && *userUploadDirectory) {
+    if (userUploadDirectory && !userUploadDirectory->empty()) {
       uploadDirectory = userUploadDirectory;
     } else {
-      uploadDirectory = this->GetOption("CPACK_PACKAGE_DIRECTORY");
-      uploadDirectory += "/CPackUploads";
+      uploadDirectory =
+        cmStrCat(this->GetOption("CPACK_PACKAGE_DIRECTORY"), "/CPackUploads");
     }
 
     // Create packages for each component
@@ -233,9 +233,7 @@ int cmCPackPackageMakerGenerator::PackageFiles()
       packageFile += '/';
       packageFile += GetPackageName(compIt->second);
 
-      std::string packageDir = toplevel;
-      packageDir += '/';
-      packageDir += compIt->first;
+      std::string packageDir = cmStrCat(toplevel, '/', compIt->first);
       if (!this->GenerateComponentPackage(
             packageFile.c_str(), packageDir.c_str(), compIt->second)) {
         return 0;
@@ -250,8 +248,8 @@ int cmCPackPackageMakerGenerator::PackageFiles()
       !this->CopyCreateResourceFile("Welcome", resDir) ||
       !this->CopyResourcePlistFile("Info.plist") ||
       !this->CopyResourcePlistFile("Description.plist")) {
-    cmCPackLogger(cmCPackLog::LOG_ERROR, "Problem copying the resource files"
-                    << std::endl);
+    cmCPackLogger(cmCPackLog::LOG_ERROR,
+                  "Problem copying the resource files" << std::endl);
     return 0;
   }
 
@@ -281,11 +279,11 @@ int cmCPackPackageMakerGenerator::PackageFiles()
   } else {
     // We have built the package in place. Generate the
     // distribution.dist file to describe it for the installer.
-    WriteDistributionFile(packageDirFileName.c_str());
+    WriteDistributionFile(packageDirFileName.c_str(), "PACKAGEMAKER");
   }
 
-  std::string tmpFile = this->GetOption("CPACK_TOPLEVEL_DIRECTORY");
-  tmpFile += "/hdiutilOutput.log";
+  std::string tmpFile = cmStrCat(this->GetOption("CPACK_TOPLEVEL_DIRECTORY"),
+                                 "/hdiutilOutput.log");
   std::ostringstream dmgCmd;
   dmgCmd << "\"" << this->GetOption("CPACK_INSTALLER_PROGRAM_DISK_IMAGE")
          << "\" create -ov -fs HFS+ -format UDZO -srcfolder \""
@@ -295,9 +293,9 @@ int cmCPackPackageMakerGenerator::PackageFiles()
   int numTries = 10;
   bool res = false;
   while (numTries > 0) {
-    res = cmSystemTools::RunSingleCommand(dmgCmd.str().c_str(), &output,
-                                          &output, &retVal, nullptr,
-                                          this->GeneratorVerbose, 0);
+    res = cmSystemTools::RunSingleCommand(
+      dmgCmd.str(), &output, &output, &retVal, nullptr, this->GeneratorVerbose,
+      cmDuration::zero());
     if (res && !retVal) {
       numTries = -1;
       break;
@@ -306,11 +304,12 @@ int cmCPackPackageMakerGenerator::PackageFiles()
     numTries--;
   }
   if (!res || retVal) {
-    cmGeneratedFileStream ofs(tmpFile.c_str());
+    cmGeneratedFileStream ofs(tmpFile);
     ofs << "# Run command: " << dmgCmd.str() << std::endl
         << "# Output:" << std::endl
         << output << std::endl;
-    cmCPackLogger(cmCPackLog::LOG_ERROR, "Problem running hdiutil command: "
+    cmCPackLogger(cmCPackLog::LOG_ERROR,
+                  "Problem running hdiutil command: "
                     << dmgCmd.str() << std::endl
                     << "Please check " << tmpFile << " for errors"
                     << std::endl);
@@ -322,6 +321,9 @@ int cmCPackPackageMakerGenerator::PackageFiles()
 
 int cmCPackPackageMakerGenerator::InitializeInternal()
 {
+  cmCPackLogger(cmCPackLog::LOG_WARNING,
+                "The PackageMaker generator is deprecated "
+                "and will be removed in a future version.\n");
   this->SetOptionIfNotSet("CPACK_PACKAGING_INSTALL_PREFIX", "/usr");
 
   // Starting with Xcode 4.3, PackageMaker is a separate app, and you
@@ -338,29 +340,29 @@ int cmCPackPackageMakerGenerator::InitializeInternal()
   // If found, save result in the CPACK_INSTALLER_PROGRAM variable.
 
   std::vector<std::string> paths;
-  paths.push_back("/Applications/Xcode.app/Contents/Applications"
-                  "/PackageMaker.app/Contents/MacOS");
-  paths.push_back("/Applications/Utilities"
-                  "/PackageMaker.app/Contents/MacOS");
-  paths.push_back("/Applications"
-                  "/PackageMaker.app/Contents/MacOS");
-  paths.push_back("/Developer/Applications/Utilities"
-                  "/PackageMaker.app/Contents/MacOS");
-  paths.push_back("/Developer/Applications"
-                  "/PackageMaker.app/Contents/MacOS");
+  paths.emplace_back("/Applications/Xcode.app/Contents/Applications"
+                     "/PackageMaker.app/Contents/MacOS");
+  paths.emplace_back("/Applications/Utilities"
+                     "/PackageMaker.app/Contents/MacOS");
+  paths.emplace_back("/Applications"
+                     "/PackageMaker.app/Contents/MacOS");
+  paths.emplace_back("/Developer/Applications/Utilities"
+                     "/PackageMaker.app/Contents/MacOS");
+  paths.emplace_back("/Developer/Applications"
+                     "/PackageMaker.app/Contents/MacOS");
 
   std::string pkgPath;
-  const char* inst_program = this->GetOption("CPACK_INSTALLER_PROGRAM");
-  if (inst_program && *inst_program) {
+  cmValue inst_program = this->GetOption("CPACK_INSTALLER_PROGRAM");
+  if (inst_program && !inst_program->empty()) {
     pkgPath = inst_program;
   } else {
     pkgPath = cmSystemTools::FindProgram("PackageMaker", paths, false);
     if (pkgPath.empty()) {
-      cmCPackLogger(cmCPackLog::LOG_ERROR, "Cannot find PackageMaker compiler"
-                      << std::endl);
+      cmCPackLogger(cmCPackLog::LOG_ERROR,
+                    "Cannot find PackageMaker compiler" << std::endl);
       return 0;
     }
-    this->SetOptionIfNotSet("CPACK_INSTALLER_PROGRAM", pkgPath.c_str());
+    this->SetOptionIfNotSet("CPACK_INSTALLER_PROGRAM", pkgPath);
   }
 
   // Get path to the real PackageMaker, not a symlink:
@@ -414,21 +416,23 @@ int cmCPackPackageMakerGenerator::InitializeInternal()
   }
   this->PackageMakerVersion = atof(rexVersion.match(1).c_str());
   if (this->PackageMakerVersion < 1.0) {
-    cmCPackLogger(cmCPackLog::LOG_ERROR, "Require PackageMaker 1.0 or higher"
-                    << std::endl);
+    cmCPackLogger(cmCPackLog::LOG_ERROR,
+                  "Require PackageMaker 1.0 or higher" << std::endl);
     return 0;
   }
-  cmCPackLogger(cmCPackLog::LOG_DEBUG, "PackageMaker version is: "
-                  << this->PackageMakerVersion << std::endl);
+  cmCPackLogger(cmCPackLog::LOG_DEBUG,
+                "PackageMaker version is: " << this->PackageMakerVersion
+                                            << std::endl);
 
   // Determine the package compatibility version. If it wasn't
   // specified by the user, we define it based on which features the
   // user requested.
-  const char* packageCompat = this->GetOption("CPACK_OSX_PACKAGE_VERSION");
-  if (packageCompat && *packageCompat) {
+  cmValue packageCompat = this->GetOption("CPACK_OSX_PACKAGE_VERSION");
+  if (packageCompat && !packageCompat->empty()) {
     unsigned int majorVersion = 10;
     unsigned int minorVersion = 5;
-    int res = sscanf(packageCompat, "%u.%u", &majorVersion, &minorVersion);
+    int res =
+      sscanf(packageCompat->c_str(), "%u.%u", &majorVersion, &minorVersion);
     if (res == 2) {
       this->PackageCompatibilityVersion =
         getVersion(majorVersion, minorVersion);
@@ -447,12 +451,11 @@ int cmCPackPackageMakerGenerator::InitializeInternal()
   std::vector<std::string> no_paths;
   pkgPath = cmSystemTools::FindProgram("hdiutil", no_paths, false);
   if (pkgPath.empty()) {
-    cmCPackLogger(cmCPackLog::LOG_ERROR, "Cannot find hdiutil compiler"
-                    << std::endl);
+    cmCPackLogger(cmCPackLog::LOG_ERROR,
+                  "Cannot find hdiutil compiler" << std::endl);
     return 0;
   }
-  this->SetOptionIfNotSet("CPACK_INSTALLER_PROGRAM_DISK_IMAGE",
-                          pkgPath.c_str());
+  this->SetOptionIfNotSet("CPACK_INSTALLER_PROGRAM_DISK_IMAGE", pkgPath);
 
   return this->Superclass::InitializeInternal();
 }
@@ -460,25 +463,27 @@ int cmCPackPackageMakerGenerator::InitializeInternal()
 bool cmCPackPackageMakerGenerator::RunPackageMaker(const char* command,
                                                    const char* packageFile)
 {
-  std::string tmpFile = this->GetOption("CPACK_TOPLEVEL_DIRECTORY");
-  tmpFile += "/PackageMakerOutput.log";
+  std::string tmpFile = cmStrCat(this->GetOption("CPACK_TOPLEVEL_DIRECTORY"),
+                                 "/PackageMakerOutput.log");
 
   cmCPackLogger(cmCPackLog::LOG_VERBOSE, "Execute: " << command << std::endl);
   std::string output;
   int retVal = 1;
   bool res = cmSystemTools::RunSingleCommand(
-    command, &output, &output, &retVal, nullptr, this->GeneratorVerbose, 0);
-  cmCPackLogger(cmCPackLog::LOG_VERBOSE, "Done running package maker"
-                  << std::endl);
+    command, &output, &output, &retVal, nullptr, this->GeneratorVerbose,
+    cmDuration::zero());
+  cmCPackLogger(cmCPackLog::LOG_VERBOSE,
+                "Done running package maker" << std::endl);
   if (!res || retVal) {
-    cmGeneratedFileStream ofs(tmpFile.c_str());
+    cmGeneratedFileStream ofs(tmpFile);
     ofs << "# Run command: " << command << std::endl
         << "# Output:" << std::endl
         << output << std::endl;
-    cmCPackLogger(
-      cmCPackLog::LOG_ERROR, "Problem running PackageMaker command: "
-        << command << std::endl
-        << "Please check " << tmpFile << " for errors" << std::endl);
+    cmCPackLogger(cmCPackLog::LOG_ERROR,
+                  "Problem running PackageMaker command: "
+                    << command << std::endl
+                    << "Please check " << tmpFile << " for errors"
+                    << std::endl);
     return false;
   }
   // sometimes the command finishes but the directory is not yet
@@ -503,8 +508,9 @@ bool cmCPackPackageMakerGenerator::GenerateComponentPackage(
   const char* packageFile, const char* packageDir,
   const cmCPackComponent& component)
 {
-  cmCPackLogger(cmCPackLog::LOG_OUTPUT, "-   Building component package: "
-                  << packageFile << std::endl);
+  cmCPackLogger(cmCPackLog::LOG_OUTPUT,
+                "-   Building component package: " << packageFile
+                                                   << std::endl);
 
   // The command that will be used to run PackageMaker
   std::ostringstream pkgCmd;
@@ -513,8 +519,9 @@ bool cmCPackPackageMakerGenerator::GenerateComponentPackage(
       this->PackageMakerVersion < 3.0) {
     // Create Description.plist and Info.plist files for normal Mac OS
     // X packages, which work on Mac OS X 10.3 and newer.
-    std::string descriptionFile = this->GetOption("CPACK_TOPLEVEL_DIRECTORY");
-    descriptionFile += '/' + component.Name + "-Description.plist";
+    std::string descriptionFile =
+      cmStrCat(this->GetOption("CPACK_TOPLEVEL_DIRECTORY"), '/',
+               component.Name, "-Description.plist");
     cmsys::ofstream out(descriptionFile.c_str());
     cmXMLWriter xout(out);
     xout.StartDocument();
@@ -535,12 +542,9 @@ bool cmCPackPackageMakerGenerator::GenerateComponentPackage(
     out.close();
 
     // Create the Info.plist file for this component
-    std::string moduleVersionSuffix = ".";
-    moduleVersionSuffix += component.Name;
-    this->SetOption("CPACK_MODULE_VERSION_SUFFIX",
-                    moduleVersionSuffix.c_str());
-    std::string infoFileName = component.Name;
-    infoFileName += "-Info.plist";
+    std::string moduleVersionSuffix = cmStrCat('.', component.Name);
+    this->SetOption("CPACK_MODULE_VERSION_SUFFIX", moduleVersionSuffix);
+    std::string infoFileName = cmStrCat(component.Name, "-Info.plist");
     if (!this->CopyResourcePlistFile("Info.plist", infoFileName.c_str())) {
       return false;
     }
@@ -557,12 +561,9 @@ bool cmCPackPackageMakerGenerator::GenerateComponentPackage(
     // like normal packages, and can be downloaded by the installer
     // on-the-fly in Mac OS X 10.5 or newer. Thus, we need to create
     // flat packages when the packages will be downloaded on the fly.
-    std::string pkgId = "com.";
-    pkgId += this->GetOption("CPACK_PACKAGE_VENDOR");
-    pkgId += '.';
-    pkgId += this->GetOption("CPACK_PACKAGE_NAME");
-    pkgId += '.';
-    pkgId += component.Name;
+    std::string pkgId =
+      cmStrCat("com.", this->GetOption("CPACK_PACKAGE_VENDOR"), '.',
+               this->GetOption("CPACK_PACKAGE_NAME"), '.', component.Name);
 
     pkgCmd << "\"" << this->GetOption("CPACK_INSTALLER_PROGRAM")
            << "\" --root \"" << packageDir << "\""
