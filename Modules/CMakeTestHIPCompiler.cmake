@@ -10,7 +10,7 @@ if(CMAKE_HIP_COMPILER_FORCED)
 endif()
 
 set(__CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS}")
-string(APPEND CMAKE_HIP_FLAGS "--cuda-host-only")
+string(APPEND CMAKE_HIP_FLAGS " --cuda-host-only")
 
 include(CMakeTestCompilerCommon)
 
@@ -41,7 +41,7 @@ endif()
 if(NOT CMAKE_HIP_COMPILER_WORKS)
   PrintTestCompilerStatus("HIP")
   __TestCompiler_setTryCompileTargetType()
-  file(WRITE ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testHIPCompiler.hip
+  string(CONCAT __TestCompiler_testHIPCompilerSource
     "#ifndef __HIP__\n"
     "# error \"The CMAKE_HIP_COMPILER is set to a C/CXX compiler\"\n"
     "#endif\n"
@@ -49,18 +49,16 @@ if(NOT CMAKE_HIP_COMPILER_WORKS)
   # Clear result from normal variable.
   unset(CMAKE_HIP_COMPILER_WORKS)
   # Puts test result in cache variable.
-  try_compile(CMAKE_HIP_COMPILER_WORKS ${CMAKE_BINARY_DIR}
-    ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/testHIPCompiler.hip
+  try_compile(CMAKE_HIP_COMPILER_WORKS
+    SOURCE_FROM_VAR testHIPCompiler.hip __TestCompiler_testHIPCompilerSource
     OUTPUT_VARIABLE __CMAKE_HIP_COMPILER_OUTPUT)
+  unset(__TestCompiler_testHIPCompilerSource)
   # Move result from cache to normal variable.
   set(CMAKE_HIP_COMPILER_WORKS ${CMAKE_HIP_COMPILER_WORKS})
   unset(CMAKE_HIP_COMPILER_WORKS CACHE)
   __TestCompiler_restoreTryCompileTargetType()
   if(NOT CMAKE_HIP_COMPILER_WORKS)
     PrintTestCompilerResult(CHECK_FAIL "broken")
-    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
-      "Determining if the HIP compiler works failed with "
-      "the following output:\n${__CMAKE_HIP_COMPILER_OUTPUT}\n\n")
     string(REPLACE "\n" "\n  " _output "${__CMAKE_HIP_COMPILER_OUTPUT}")
     message(FATAL_ERROR "The HIP compiler\n  \"${CMAKE_HIP_COMPILER}\"\n"
       "is not able to compile a simple test program.\nIt fails "
@@ -68,9 +66,6 @@ if(NOT CMAKE_HIP_COMPILER_WORKS)
       "CMake will not be able to correctly generate this project.")
   endif()
   PrintTestCompilerResult(CHECK_PASS "works")
-  file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-    "Determining if the HIP compiler works passed with "
-    "the following output:\n${__CMAKE_HIP_COMPILER_OUTPUT}\n\n")
 endif()
 
 set(CMAKE_HIP_FLAGS "${__CMAKE_HIP_FLAGS}")

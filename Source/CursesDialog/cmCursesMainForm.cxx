@@ -35,11 +35,6 @@ cmCursesMainForm::cmCursesMainForm(std::vector<std::string> args,
   : Args(std::move(args))
   , InitialWidth(initWidth)
 {
-  this->HasNonStatusOutputs = false;
-  this->NumberOfPages = 0;
-  this->AdvancedMode = false;
-  this->NumberOfVisibleEntries = 0;
-  this->OkToGenerate = false;
   this->HelpMessage.emplace_back(
     "Welcome to ccmake, curses based user interface for CMake.");
   this->HelpMessage.emplace_back();
@@ -54,7 +49,6 @@ cmCursesMainForm::cmCursesMainForm(std::vector<std::string> args,
     cmStrCat(cmSystemTools::GetProgramPath(this->Args[0]), "/cmake");
   this->Args[0] = whereCMake;
   this->CMakeInstance->SetArgs(this->Args);
-  this->SearchMode = false;
 }
 
 cmCursesMainForm::~cmCursesMainForm()
@@ -99,13 +93,14 @@ void cmCursesMainForm::InitializeUI()
 
   int entrywidth = this->InitialWidth - 35;
 
-  if (count == 0) {
-    // If cache is empty, display a label saying so and a
-    // dummy entry widget (does not respond to input)
-    cmCursesCacheEntryComposite comp("EMPTY CACHE", 30, 30);
-    comp.Entry = cm::make_unique<cmCursesDummyWidget>(1, 1, 1, 1);
-    newEntries.emplace_back(std::move(comp));
-  } else {
+  // Add a label to display when cache is empty
+  // dummy entry widget (does not respond to input)
+  this->EmptyCacheEntry =
+    cm::make_unique<cmCursesCacheEntryComposite>("EMPTY CACHE", 30, 30);
+  this->EmptyCacheEntry->Entry =
+    cm::make_unique<cmCursesDummyWidget>(1, 1, 1, 1);
+
+  if (count > 0) {
     // Create the composites.
 
     // First add entries which are new
@@ -196,11 +191,11 @@ void cmCursesMainForm::RePost()
     this->Fields.push_back(entry.Entry->Field);
   }
   // if no cache entries there should still be one dummy field
-  if (this->Fields.empty()) {
-    const auto& front = this->Entries.front();
-    this->Fields.push_back(front.Label->Field);
-    this->Fields.push_back(front.IsNewLabel->Field);
-    this->Fields.push_back(front.Entry->Field);
+  this->IsEmpty = this->Fields.empty();
+  if (this->IsEmpty) {
+    this->Fields.push_back(this->EmptyCacheEntry->Label->Field);
+    this->Fields.push_back(this->EmptyCacheEntry->IsNewLabel->Field);
+    this->Fields.push_back(this->EmptyCacheEntry->Entry->Field);
     this->NumberOfVisibleEntries = 1;
   }
   // Has to be null terminated.
@@ -322,22 +317,22 @@ void cmCursesMainForm::PrintKeys(int process /* = 0 */)
       memset(thirdLine, ' ', 68);
     } else {
       if (this->OkToGenerate) {
-        sprintf(firstLine,
-                "      [l] Show log output   [c] Configure"
-                "       [g] Generate        ");
+        snprintf(firstLine, sizeof(firstLine),
+                 "      [l] Show log output   [c] Configure"
+                 "       [g] Generate        ");
       } else {
-        sprintf(firstLine,
-                "      [l] Show log output   [c] Configure"
-                "                           ");
+        snprintf(firstLine, sizeof(firstLine),
+                 "      [l] Show log output   [c] Configure"
+                 "                           ");
       }
       {
         const char* toggleKeyInstruction =
           "      [t] Toggle advanced mode (currently %s)";
-        sprintf(thirdLine, toggleKeyInstruction,
-                this->AdvancedMode ? "on" : "off");
+        snprintf(thirdLine, sizeof(thirdLine), toggleKeyInstruction,
+                 this->AdvancedMode ? "on" : "off");
       }
-      sprintf(secondLine,
-              "      [h] Help              [q] Quit without generating");
+      snprintf(secondLine, sizeof(secondLine),
+               "      [h] Help              [q] Quit without generating");
     }
 
     curses_move(y - 4, 0);
@@ -356,7 +351,8 @@ void cmCursesMainForm::PrintKeys(int process /* = 0 */)
 
   if (cw) {
     char pageLine[512] = "";
-    sprintf(pageLine, "Page %d of %d", cw->GetPage(), this->NumberOfPages);
+    snprintf(pageLine, sizeof(pageLine), "Page %d of %d", cw->GetPage(),
+             this->NumberOfPages);
     curses_move(0, 65 - static_cast<unsigned int>(strlen(pageLine)) - 1);
     printw(fmt_s, pageLine);
   }
@@ -498,21 +494,21 @@ int cmCursesMainForm::Configure(int noconfigure)
 
   if (retVal != 0 || this->HasNonStatusOutputs) {
     // see if there was an error
-    if (cmSystemTools::GetErrorOccuredFlag()) {
+    if (cmSystemTools::GetErrorOccurredFlag()) {
       this->OkToGenerate = false;
     }
     int xx;
     int yy;
     getmaxyx(stdscr, yy, xx);
     const char* title = "Configure produced the following output";
-    if (cmSystemTools::GetErrorOccuredFlag()) {
+    if (cmSystemTools::GetErrorOccurredFlag()) {
       title = "Configure failed with the following output";
     }
     cmCursesLongMessageForm* msgs = new cmCursesLongMessageForm(
       this->Outputs, title,
       cmCursesLongMessageForm::ScrollBehavior::ScrollDown);
     // reset error condition
-    cmSystemTools::ResetErrorOccuredFlag();
+    cmSystemTools::ResetErrorOccurredFlag();
     CurrentForm = msgs;
     msgs->Render(1, 1, xx, yy);
     msgs->HandleInput();
@@ -551,16 +547,16 @@ int cmCursesMainForm::Generate()
 
   if (retVal != 0 || this->HasNonStatusOutputs) {
     // see if there was an error
-    if (cmSystemTools::GetErrorOccuredFlag()) {
+    if (cmSystemTools::GetErrorOccurredFlag()) {
       this->OkToGenerate = false;
     }
     // reset error condition
-    cmSystemTools::ResetErrorOccuredFlag();
+    cmSystemTools::ResetErrorOccurredFlag();
     int xx;
     int yy;
     getmaxyx(stdscr, yy, xx);
     const char* title = "Generate produced the following output";
-    if (cmSystemTools::GetErrorOccuredFlag()) {
+    if (cmSystemTools::GetErrorOccurredFlag()) {
       title = "Generate failed with the following output";
     }
     cmCursesLongMessageForm* msgs = new cmCursesLongMessageForm(
@@ -621,7 +617,7 @@ void cmCursesMainForm::FillCacheManagerFromUI()
     cmValue existingValue =
       this->CMakeInstance->GetState()->GetCacheEntryValue(cacheKey);
     if (existingValue) {
-      std::string oldValue = *existingValue;
+      std::string const& oldValue = *existingValue;
       std::string newValue = entry.Entry->GetValue();
       std::string fixedOldValue;
       std::string fixedNewValue;
@@ -685,6 +681,12 @@ void cmCursesMainForm::HandleInput()
     }
     int key = getch();
 
+#ifdef _WIN32
+    if (key == KEY_RESIZE) {
+      HandleResize();
+    }
+#endif // _WIN32
+
     getmaxyx(stdscr, y, x);
     // If window too small, handle 'q' only
     if (x < cmCursesMainForm::MIN_WIDTH || y < cmCursesMainForm::MIN_HEIGHT) {
@@ -739,7 +741,8 @@ void cmCursesMainForm::HandleInput()
     if ((!currentWidget || !widgetHandled) && !this->SearchMode) {
       // If the current widget does not want to handle input,
       // we handle it.
-      sprintf(debugMessage, "Main form handling input, key: %d", key);
+      snprintf(debugMessage, sizeof(debugMessage),
+               "Main form handling input, key: %d", key);
       cmCursesForm::LogMessage(debugMessage);
       // quit
       if (key == 'q') {
@@ -867,7 +870,7 @@ void cmCursesMainForm::HandleInput()
         }
       }
       // delete cache entry
-      else if (key == 'd' && this->NumberOfVisibleEntries) {
+      else if (key == 'd' && this->NumberOfVisibleEntries && !this->IsEmpty) {
         this->OkToGenerate = false;
         FIELD* cur = current_field(this->Form);
         size_t findex = field_index(cur);
@@ -970,7 +973,7 @@ void cmCursesMainForm::JumpToCacheEntry(const char* astr)
         }
       }
     }
-    if (size_t(findex) >= 3 * this->NumberOfVisibleEntries - 1) {
+    if (static_cast<size_t>(findex) >= 3 * this->NumberOfVisibleEntries - 1) {
       set_current_field(this->Form, this->Fields[2]);
     } else if (new_page(this->Fields[findex + 1])) {
       form_driver(this->Form, REQ_NEXT_PAGE);

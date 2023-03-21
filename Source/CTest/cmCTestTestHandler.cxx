@@ -59,6 +59,8 @@ public:
   }
 
   virtual ~cmCTestCommand() = default;
+  cmCTestCommand(const cmCTestCommand&) = default;
+  cmCTestCommand& operator=(const cmCTestCommand&) = default;
 
   bool operator()(std::vector<cmListFileArgument> const& args,
                   cmExecutionStatus& status)
@@ -79,75 +81,20 @@ public:
   cmCTestTestHandler* TestHandler;
 };
 
-bool cmCTestSubdirCommand(std::vector<std::string> const& args,
-                          cmExecutionStatus& status)
+bool ReadSubdirectory(std::string fname, cmExecutionStatus& status)
 {
-  if (args.empty()) {
-    status.SetError("called with incorrect number of arguments");
-    return false;
-  }
-  std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
-  for (std::string const& arg : args) {
-    std::string fname;
-
-    if (cmSystemTools::FileIsFullPath(arg)) {
-      fname = arg;
-    } else {
-      fname = cmStrCat(cwd, '/', arg);
-    }
-
-    if (!cmSystemTools::FileIsDirectory(fname)) {
-      // No subdirectory? So what...
-      continue;
-    }
-    bool readit = false;
-    {
-      cmWorkingDirectory workdir(fname);
-      if (workdir.Failed()) {
-        status.SetError("Failed to change directory to " + fname + " : " +
-                        std::strerror(workdir.GetLastResult()));
-        return false;
-      }
-      const char* testFilename;
-      if (cmSystemTools::FileExists("CTestTestfile.cmake")) {
-        // does the CTestTestfile.cmake exist ?
-        testFilename = "CTestTestfile.cmake";
-      } else if (cmSystemTools::FileExists("DartTestfile.txt")) {
-        // does the DartTestfile.txt exist ?
-        testFilename = "DartTestfile.txt";
-      } else {
-        // No CTestTestfile? Who cares...
-        continue;
-      }
-      fname += "/";
-      fname += testFilename;
-      readit = status.GetMakefile().ReadDependentFile(fname);
-    }
-    if (!readit) {
-      status.SetError(cmStrCat("Could not load include file: ", fname));
-      return false;
-    }
-  }
-  return true;
-}
-
-bool cmCTestAddSubdirectoryCommand(std::vector<std::string> const& args,
-                                   cmExecutionStatus& status)
-{
-  if (args.empty()) {
-    status.SetError("called with incorrect number of arguments");
-    return false;
-  }
-
-  std::string fname =
-    cmStrCat(cmSystemTools::GetCurrentWorkingDirectory(), '/', args[0]);
-
   if (!cmSystemTools::FileExists(fname)) {
     // No subdirectory? So what...
     return true;
   }
   bool readit = false;
   {
+    cmWorkingDirectory workdir(fname);
+    if (workdir.Failed()) {
+      status.SetError("Failed to change directory to " + fname + " : " +
+                      std::strerror(workdir.GetLastResult()));
+      return false;
+    }
     const char* testFilename;
     if (cmSystemTools::FileExists("CTestTestfile.cmake")) {
       // does the CTestTestfile.cmake exist ?
@@ -168,6 +115,44 @@ bool cmCTestAddSubdirectoryCommand(std::vector<std::string> const& args,
     return false;
   }
   return true;
+}
+
+bool cmCTestSubdirCommand(std::vector<std::string> const& args,
+                          cmExecutionStatus& status)
+{
+  if (args.empty()) {
+    status.SetError("called with incorrect number of arguments");
+    return false;
+  }
+  std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
+  for (std::string const& arg : args) {
+    std::string fname;
+
+    if (cmSystemTools::FileIsFullPath(arg)) {
+      fname = arg;
+    } else {
+      fname = cmStrCat(cwd, '/', arg);
+    }
+
+    if (!ReadSubdirectory(std::move(fname), status)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool cmCTestAddSubdirectoryCommand(std::vector<std::string> const& args,
+                                   cmExecutionStatus& status)
+{
+  if (args.empty()) {
+    status.SetError("called with incorrect number of arguments");
+    return false;
+  }
+
+  std::string fname =
+    cmStrCat(cmSystemTools::GetCurrentWorkingDirectory(), '/', args[0]);
+
+  return ReadSubdirectory(std::move(fname), status);
 }
 
 class cmCTestAddTestCommand : public cmCTestCommand
@@ -296,6 +281,7 @@ cmCTestTestHandler::cmCTestTestHandler()
 
   this->CustomMaximumPassedTestOutputSize = 1 * 1024;
   this->CustomMaximumFailedTestOutputSize = 300 * 1024;
+  this->TestOutputTruncation = cmCTestTypes::TruncationMode::Tail;
 
   this->MemCheck = false;
 
@@ -340,6 +326,7 @@ void cmCTestTestHandler::Initialize()
   this->CustomPostTest.clear();
   this->CustomMaximumPassedTestOutputSize = 1 * 1024;
   this->CustomMaximumFailedTestOutputSize = 300 * 1024;
+  this->TestOutputTruncation = cmCTestTypes::TruncationMode::Tail;
 
   this->TestsToRun.clear();
 
@@ -373,6 +360,15 @@ void cmCTestTestHandler::PopulateCustomVectors(cmMakefile* mf)
   this->CTest->PopulateCustomInteger(
     mf, "CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE",
     this->CustomMaximumFailedTestOutputSize);
+
+  cmValue dval = mf->GetDefinition("CTEST_CUSTOM_TEST_OUTPUT_TRUNCATION");
+  if (dval) {
+    if (!this->SetTestOutputTruncation(*dval)) {
+      cmCTestLog(this->CTest, ERROR_MESSAGE,
+                 "Invalid value for CTEST_CUSTOM_TEST_OUTPUT_TRUNCATION: "
+                   << *dval << std::endl);
+    }
+  }
 }
 
 int cmCTestTestHandler::PreProcessHandler()
@@ -524,7 +520,7 @@ bool cmCTestTestHandler::ProcessOptions()
   if (cmValue repeat = this->GetOption("Repeat")) {
     cmsys::RegularExpression repeatRegex(
       "^(UNTIL_FAIL|UNTIL_PASS|AFTER_TIMEOUT):([0-9]+)$");
-    if (repeatRegex.find(repeat)) {
+    if (repeatRegex.find(*repeat)) {
       std::string const& count = repeatRegex.match(2);
       unsigned long n = 1;
       cmStrToULong(count, &n); // regex guarantees success
@@ -541,12 +537,13 @@ bool cmCTestTestHandler::ProcessOptions()
       }
     } else {
       cmCTestLog(this->CTest, ERROR_MESSAGE,
-                 "Repeat option invalid value: " << repeat << std::endl);
+                 "Repeat option invalid value: " << *repeat << std::endl);
       return false;
     }
   }
   if (this->GetOption("ParallelLevel")) {
-    this->CTest->SetParallelLevel(std::stoi(this->GetOption("ParallelLevel")));
+    this->CTest->SetParallelLevel(
+      std::stoi(*this->GetOption("ParallelLevel")));
   }
 
   if (this->GetOption("StopOnFailure")) {
@@ -560,12 +557,12 @@ bool cmCTestTestHandler::ProcessOptions()
   cmValue val = this->GetOption("IncludeRegularExpression");
   if (val) {
     this->UseIncludeRegExp();
-    this->SetIncludeRegExp(val);
+    this->SetIncludeRegExp(*val);
   }
   val = this->GetOption("ExcludeRegularExpression");
   if (val) {
     this->UseExcludeRegExp();
-    this->SetExcludeRegExp(val);
+    this->SetExcludeRegExp(*val);
   }
   val = this->GetOption("ExcludeFixtureRegularExpression");
   if (val) {
@@ -594,7 +591,8 @@ void cmCTestTestHandler::LogTestSummary(const std::vector<std::string>& passed,
 {
   std::size_t total = passed.size() + failed.size();
 
-  float percent = float(passed.size()) * 100.0f / float(total);
+  float percent =
+    static_cast<float>(passed.size()) * 100.0f / static_cast<float>(total);
   if (!failed.empty() && percent > 99) {
     percent = 99;
   }
@@ -621,7 +619,7 @@ void cmCTestTestHandler::LogTestSummary(const std::vector<std::string>& passed,
     this->PrintLabelOrSubprojectSummary(false);
   }
   char realBuf[1024];
-  sprintf(realBuf, "%6.2f sec", durationInSecs.count());
+  snprintf(realBuf, sizeof(realBuf), "%6.2f sec", durationInSecs.count());
   cmCTestOptionalLog(this->CTest, HANDLER_OUTPUT,
                      "\nTotal Test time (real) = " << realBuf << "\n",
                      this->Quiet);
@@ -782,7 +780,7 @@ void cmCTestTestHandler::PrintLabelOrSubprojectSummary(bool doSubProject)
     label.resize(maxlen + 3, ' ');
 
     char buf[1024];
-    sprintf(buf, "%6.2f sec*proc", labelTimes[i]);
+    snprintf(buf, sizeof(buf), "%6.2f sec*proc", labelTimes[i]);
 
     std::ostringstream labelCountStr;
     labelCountStr << "(" << labelCounts[i] << " test";
@@ -1825,7 +1823,7 @@ bool cmCTestTestHandler::GetListOfTests()
   if (!mf.ReadListFile(testFilename)) {
     return false;
   }
-  if (cmSystemTools::GetErrorOccuredFlag()) {
+  if (cmSystemTools::GetErrorOccurredFlag()) {
     // SEND_ERROR or FATAL_ERROR in CTestTestfile or TEST_INCLUDE_FILES
     return false;
   }
@@ -2091,6 +2089,20 @@ void cmCTestTestHandler::SetExcludeRegExp(const std::string& arg)
   this->ExcludeRegExp = arg;
 }
 
+bool cmCTestTestHandler::SetTestOutputTruncation(const std::string& mode)
+{
+  if (mode == "tail") {
+    this->TestOutputTruncation = cmCTestTypes::TruncationMode::Tail;
+  } else if (mode == "middle") {
+    this->TestOutputTruncation = cmCTestTypes::TruncationMode::Middle;
+  } else if (mode == "head") {
+    this->TestOutputTruncation = cmCTestTypes::TruncationMode::Head;
+  } else {
+    return false;
+  }
+  return true;
+}
+
 void cmCTestTestHandler::SetTestsToRunInformation(cmValue in)
 {
   if (!in) {
@@ -2099,9 +2111,9 @@ void cmCTestTestHandler::SetTestsToRunInformation(cmValue in)
   this->TestsToRunString = *in;
   // if the argument is a file, then read it and use the contents as the
   // string
-  if (cmSystemTools::FileExists(in)) {
+  if (cmSystemTools::FileExists(*in)) {
     cmsys::ifstream fin(in->c_str());
-    unsigned long filelen = cmSystemTools::FileLength(in);
+    unsigned long filelen = cmSystemTools::FileLength(*in);
     auto buff = cm::make_unique<char[]>(filelen + 1);
     fin.getline(buff.get(), filelen);
     buff[fin.gcount()] = 0;
@@ -2109,41 +2121,58 @@ void cmCTestTestHandler::SetTestsToRunInformation(cmValue in)
   }
 }
 
-void cmCTestTestHandler::CleanTestOutput(std::string& output, size_t length)
+void cmCTestTestHandler::CleanTestOutput(std::string& output, size_t length,
+                                         cmCTestTypes::TruncationMode truncate)
 {
   if (!length || length >= output.size() ||
       output.find("CTEST_FULL_OUTPUT") != std::string::npos) {
     return;
   }
 
-  // Truncate at given length but do not break in the middle of a multi-byte
-  // UTF-8 encoding.
+  // Advance n bytes in string delimited by begin/end but do not break in the
+  // middle of a multi-byte UTF-8 encoding.
+  auto utf8_advance = [](char const* const begin, char const* const end,
+                         size_t n) -> const char* {
+    char const* const stop = begin + n;
+    char const* current = begin;
+    while (current < stop) {
+      unsigned int ch;
+      if (const char* next = cm_utf8_decode_character(current, end, &ch)) {
+        if (next > stop) {
+          break;
+        }
+        current = next;
+      } else // Bad byte will be handled by cmXMLWriter.
+      {
+        ++current;
+      }
+    }
+    return current;
+  };
+
+  // Truncation message.
+  const std::string msg =
+    "\n[This part of the test output was removed since it "
+    "exceeds the threshold of " +
+    std::to_string(length) + " bytes.]\n";
+
   char const* const begin = output.c_str();
   char const* const end = begin + output.size();
-  char const* const truncate = begin + length;
-  char const* current = begin;
-  while (current < truncate) {
-    unsigned int ch;
-    if (const char* next = cm_utf8_decode_character(current, end, &ch)) {
-      if (next > truncate) {
-        break;
-      }
-      current = next;
-    } else // Bad byte will be handled by cmXMLWriter.
-    {
-      ++current;
-    }
-  }
-  output.erase(current - begin);
 
-  // Append truncation message.
-  std::ostringstream msg;
-  msg << "...\n"
-         "The rest of the test output was removed since it exceeds the "
-         "threshold "
-         "of "
-      << length << " bytes.\n";
-  output += msg.str();
+  // Erase head, middle or tail of output.
+  if (truncate == cmCTestTypes::TruncationMode::Head) {
+    char const* current = utf8_advance(begin, end, output.size() - length);
+    output.erase(0, current - begin);
+    output.insert(0, msg + "...");
+  } else if (truncate == cmCTestTypes::TruncationMode::Middle) {
+    char const* current = utf8_advance(begin, end, length / 2);
+    output.erase(current - begin, output.size() - length);
+    output.insert(current - begin, "..." + msg + "...");
+  } else { // default or "tail"
+    char const* current = utf8_advance(begin, end, length);
+    output.erase(current - begin);
+    output += ("..." + msg);
+  }
 }
 
 bool cmCTestTestHandler::SetTestsProperties(
@@ -2181,7 +2210,7 @@ bool cmCTestTestHandler::SetTestsProperties(
             // Ensure we have complete triples otherwise the data is corrupt.
             if (triples.size() % 3 == 0) {
               cmState state(cmState::Unknown);
-              rt.Backtrace = cmListFileBacktrace(state.CreateBaseSnapshot());
+              rt.Backtrace = cmListFileBacktrace();
 
               // the first entry represents the top of the trace so we need to
               // reconstruct the backtrace in reverse
@@ -2463,22 +2492,19 @@ bool cmCTestTestHandler::WriteJUnitXML()
   // Iterate over the test results to get the number of tests that
   // passed, failed, etc.
   auto num_tests = 0;
-  auto num_passed = 0;
   auto num_failed = 0;
   auto num_notrun = 0;
   auto num_disabled = 0;
   SetOfTests resultsSet(this->TestResults.begin(), this->TestResults.end());
   for (cmCTestTestResult const& result : resultsSet) {
     num_tests++;
-    if (result.Status == cmCTestTestHandler::COMPLETED) {
-      num_passed++;
-    } else if (result.Status == cmCTestTestHandler::NOT_RUN) {
+    if (result.Status == cmCTestTestHandler::NOT_RUN) {
       if (result.CompletionStatus == "Disabled") {
         num_disabled++;
       } else {
         num_notrun++;
       }
-    } else {
+    } else if (result.Status != cmCTestTestHandler::COMPLETED) {
       num_failed++;
     }
   }

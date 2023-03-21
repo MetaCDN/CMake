@@ -154,6 +154,8 @@ private:
   bool GetQtExecutable(GenVarsT& genVars, const std::string& executable,
                        bool ignoreMissingTarget) const;
 
+  void handleSkipPch(cmSourceFile* sf);
+
   cmQtAutoGenGlobalInitializer* GlobalInitializer = nullptr;
   cmGeneratorTarget* GenTarget = nullptr;
   cmGlobalGenerator* GlobalGen = nullptr;
@@ -178,6 +180,7 @@ private:
   {
     std::string Info;
     std::string Build;
+    std::string RelativeBuild;
     std::string Work;
     ConfigString Include;
     std::string IncludeGenExp;

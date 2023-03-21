@@ -61,24 +61,22 @@ macro(CHECK_LIBRARY_EXISTS LIBRARY FUNCTION LOCATION VARIABLE)
     endif()
 
     if(CMAKE_C_COMPILER_LOADED)
-      set(_cle_source ${CMAKE_ROOT}/Modules/CheckFunctionExists.c)
+      set(_cle_source CheckFunctionExists.c)
     elseif(CMAKE_CXX_COMPILER_LOADED)
-      set(_cle_source ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CheckLibraryExists/CheckFunctionExists.cxx)
-      configure_file(${CMAKE_ROOT}/Modules/CheckFunctionExists.c "${_cle_source}" COPYONLY)
+      set(_cle_source CheckFunctionExists.cxx)
     else()
       message(FATAL_ERROR "CHECK_FUNCTION_EXISTS needs either C or CXX language enabled")
     endif()
 
     try_compile(${VARIABLE}
-      ${CMAKE_BINARY_DIR}
-      ${_cle_source}
+      SOURCE_FROM_FILE "${_cle_source}" "${CMAKE_ROOT}/Modules/CheckFunctionExists.c"
       COMPILE_DEFINITIONS ${CMAKE_REQUIRED_DEFINITIONS}
       ${CHECK_LIBRARY_EXISTS_LINK_OPTIONS}
       LINK_LIBRARIES ${CHECK_LIBRARY_EXISTS_LIBRARIES}
       CMAKE_FLAGS
       -DCOMPILE_DEFINITIONS:STRING=${MACRO_CHECK_LIBRARY_EXISTS_DEFINITION}
       -DLINK_DIRECTORIES:STRING=${LOCATION}
-      OUTPUT_VARIABLE OUTPUT)
+      )
     unset(_cle_source)
 
     if(${VARIABLE})
@@ -86,19 +84,11 @@ macro(CHECK_LIBRARY_EXISTS LIBRARY FUNCTION LOCATION VARIABLE)
         message(CHECK_PASS "found")
       endif()
       set(${VARIABLE} 1 CACHE INTERNAL "Have library ${LIBRARY}")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-        "Determining if the function ${FUNCTION} exists in the ${LIBRARY} "
-        "passed with the following output:\n"
-        "${OUTPUT}\n\n")
     else()
       if(NOT CMAKE_REQUIRED_QUIET)
         message(CHECK_FAIL "not found")
       endif()
       set(${VARIABLE} "" CACHE INTERNAL "Have library ${LIBRARY}")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
-        "Determining if the function ${FUNCTION} exists in the ${LIBRARY} "
-        "failed with the following output:\n"
-        "${OUTPUT}\n\n")
     endif()
   endif()
 endmacro()

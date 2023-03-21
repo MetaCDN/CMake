@@ -18,6 +18,7 @@
 
 #include "cm_codecvt.hxx"
 
+#include "cmBuildOptions.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGlobalCommonGenerator.h"
 #include "cmGlobalGeneratorFactory.h"
@@ -34,7 +35,7 @@ class cmMakefile;
 class cmOutputConverter;
 class cmStateDirectory;
 class cmake;
-struct cmDocumentationEntry;
+struct cmCxxModuleExportInfo;
 
 /**
  * \class cmGlobalNinjaGenerator
@@ -77,6 +78,7 @@ public:
 
   static std::string EncodeRuleName(std::string const& name);
   std::string EncodeLiteral(const std::string& lit);
+  void EncodeLiteralInplace(std::string& lit);
   std::string EncodePath(const std::string& path);
 
   std::unique_ptr<cmLinkLineComputer> CreateLinkLineComputer(
@@ -191,7 +193,7 @@ public:
   /** Get encoding used by generator for ninja files */
   codecvt::Encoding GetMakefileEncoding() const override;
 
-  static void GetDocumentation(cmDocumentationEntry& entry);
+  static cmDocumentationEntry GetDocumentation();
 
   void EnableLanguage(std::vector<std::string> const& languages,
                       cmMakefile* mf, bool optional) override;
@@ -199,7 +201,8 @@ public:
   std::vector<GeneratedMakeCommand> GenerateBuildCommand(
     const std::string& makeProgram, const std::string& projectName,
     const std::string& projectDir, std::vector<std::string> const& targetNames,
-    const std::string& config, bool fast, int jobs, bool verbose,
+    const std::string& config, int jobs, bool verbose,
+    const cmBuildOptions& buildOptions = cmBuildOptions(),
     std::vector<std::string> const& makeOptions =
       std::vector<std::string>()) override;
 
@@ -289,7 +292,8 @@ public:
   }
 
   void AddCXXCompileCommand(const std::string& commandLine,
-                            const std::string& sourceFile);
+                            const std::string& sourceFile,
+                            const std::string& objPath);
 
   /**
    * Add a rule to the generated build system.
@@ -390,7 +394,8 @@ public:
   {
     return "1.9";
   }
-  static std::string RequiredNinjaVersionForDyndeps() { return "1.10"; }
+  static std::string RequiredNinjaVersionForDyndepsCxx() { return "1.11"; }
+  static std::string RequiredNinjaVersionForDyndepsFortran() { return "1.10"; }
   static std::string RequiredNinjaVersionForRestatTool() { return "1.10"; }
   static std::string RequiredNinjaVersionForUnconditionalRecompactTool()
   {
@@ -420,7 +425,8 @@ public:
     std::string const& arg_dd, std::vector<std::string> const& arg_ddis,
     std::string const& module_dir,
     std::vector<std::string> const& linked_target_dirs,
-    std::string const& arg_lang, std::string const& arg_modmapfmt);
+    std::string const& arg_lang, std::string const& arg_modmapfmt,
+    cmCxxModuleExportInfo const& export_info);
 
   virtual std::string BuildAlias(const std::string& alias,
                                  const std::string& /*config*/) const
@@ -464,7 +470,7 @@ public:
 
   bool IsSingleConfigUtility(cmGeneratorTarget const* target) const;
 
-  bool CheckCxxModuleSupport();
+  bool CheckCxxModuleSupport() override;
 
 protected:
   void Generate() override;
@@ -480,8 +486,6 @@ protected:
   static cm::optional<std::set<std::string>> ListSubsetWithAll(
     const std::set<std::string>& all, const std::set<std::string>& defaults,
     const std::vector<std::string>& items);
-
-  virtual bool InspectConfigTypeVariables() { return true; }
 
   std::set<std::string> CrossConfigs;
   std::set<std::string> DefaultConfigs;
@@ -580,7 +584,8 @@ private:
   bool NinjaSupportsImplicitOuts = false;
   bool NinjaSupportsManifestRestat = false;
   bool NinjaSupportsMultilineDepfile = false;
-  bool NinjaSupportsDyndeps = false;
+  bool NinjaSupportsDyndepsCxx = false;
+  bool NinjaSupportsDyndepsFortran = false;
   bool NinjaSupportsRestatTool = false;
   bool NinjaSupportsUnconditionalRecompactTool = false;
   bool NinjaSupportsMultipleOutputs = false;
@@ -589,7 +594,7 @@ private:
 
   codecvt::Encoding NinjaExpectedEncoding = codecvt::None;
 
-  bool DiagnosedCxxModuleSupport = false;
+  bool DiagnosedCxxModuleNinjaSupport = false;
 
   void InitOutputPathPrefix();
 
@@ -652,7 +657,7 @@ public:
       new cmGlobalGeneratorSimpleFactory<cmGlobalNinjaMultiGenerator>());
   }
 
-  static void GetDocumentation(cmDocumentationEntry& entry);
+  static cmDocumentationEntry GetDocumentation();
 
   std::string GetName() const override
   {

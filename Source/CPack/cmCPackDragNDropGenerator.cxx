@@ -14,6 +14,7 @@
 #include "cmsys/FStream.hxx"
 #include "cmsys/RegularExpression.hxx"
 
+#include "cmCPackConfigure.h"
 #include "cmCPackGenerator.h"
 #include "cmCPackLog.h"
 #include "cmDuration.h"
@@ -23,7 +24,7 @@
 #include "cmValue.h"
 #include "cmXMLWriter.h"
 
-#ifdef HAVE_CoreServices
+#if HAVE_CoreServices
 // For the old LocaleStringToLangAndRegionCodes() function, to convert
 // to the old Script Manager RegionCode values needed for the 'LPic' data
 // structure used for generating multi-lingual SLAs.
@@ -98,7 +99,9 @@ int cmCPackDragNDropGenerator::InitializeInternal()
 
   if (this->IsSet("CPACK_DMG_SLA_DIR")) {
     slaDirectory = this->GetOption("CPACK_DMG_SLA_DIR");
-    if (!slaDirectory.empty() && this->IsSet("CPACK_RESOURCE_FILE_LICENSE")) {
+    if (!slaDirectory.empty() &&
+        this->IsOn("CPACK_DMG_SLA_USE_RESOURCE_FILE_LICENSE") &&
+        this->IsSet("CPACK_RESOURCE_FILE_LICENSE")) {
       std::string license_file =
         this->GetOption("CPACK_RESOURCE_FILE_LICENSE");
       if (!license_file.empty() &&
@@ -278,8 +281,10 @@ int cmCPackDragNDropGenerator::CreateDMG(const std::string& src_dir,
     : "HFS+";
 
   // Get optional arguments ...
-  std::string cpack_license_file =
-    *this->GetOption("CPACK_RESOURCE_FILE_LICENSE");
+  std::string cpack_license_file;
+  if (this->IsOn("CPACK_DMG_SLA_USE_RESOURCE_FILE_LICENSE")) {
+    cpack_license_file = *this->GetOption("CPACK_RESOURCE_FILE_LICENSE");
+  }
 
   cmValue cpack_dmg_background_image =
     this->GetOption("CPACK_DMG_BACKGROUND_IMAGE");
@@ -446,7 +451,7 @@ int cmCPackDragNDropGenerator::CreateDMG(const std::string& src_dir,
     mountpoint_regex.find(attach_output.c_str());
     std::string const temp_mount = mountpoint_regex.match(1);
     std::string const temp_mount_name =
-      temp_mount.substr(sizeof("/Volumes/") - 1);
+      temp_mount.substr(cmStrLen("/Volumes/"));
 
     // Remove dummy padding file so we have enough space on RW image ...
     std::ostringstream dummy_padding;
@@ -586,7 +591,7 @@ int cmCPackDragNDropGenerator::CreateDMG(const std::string& src_dir,
                            kCFStringEncodingMacRoman);
         LangCode lang = 0;
         RegionCode region = 0;
-#ifdef HAVE_CoreServices
+#if HAVE_CoreServices
         OSStatus err =
           LocaleStringToLangAndRegionCodes(iso_language_cstr, &lang, &region);
         if (err != noErr)
@@ -597,7 +602,7 @@ int cmCPackDragNDropGenerator::CreateDMG(const std::string& src_dir,
                           << iso_language_cstr << std::endl);
           return 0;
         }
-#ifdef HAVE_CoreServices
+#if HAVE_CoreServices
         header_data.push_back(region);
         header_data.push_back(i);
         header_data.push_back(0);

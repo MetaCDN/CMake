@@ -44,6 +44,39 @@ if("${_help}" MATCHES "GNU ld .* 2\\.1[1-6]")
   set(__WINDOWS_GNU_LD_RESPONSE 0)
 endif()
 
+
+# Features for LINK_LIBRARY generator expression
+## check linker capabilities
+if(NOT DEFINED _CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED)
+  execute_process(COMMAND "${CMAKE_LINKER}" --help
+                  OUTPUT_VARIABLE __linker_help
+                  ERROR_VARIABLE __linker_help)
+  if(__linker_help MATCHES "--push-state" AND __linker_help MATCHES "--pop-state")
+    set(_CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED TRUE CACHE INTERNAL "linker supports push/pop state")
+  else()
+    set(_CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED FALSE CACHE INTERNAL "linker supports push/pop state")
+  endif()
+  unset(__linker_help)
+endif()
+## WHOLE_ARCHIVE: Force loading all members of an archive
+if(_CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED)
+  set(CMAKE_LINK_LIBRARY_USING_WHOLE_ARCHIVE "LINKER:--push-state,--whole-archive"
+                                             "<LINK_ITEM>"
+                                             "LINKER:--pop-state")
+else()
+  set(CMAKE_LINK_LIBRARY_USING_WHOLE_ARCHIVE "LINKER:--whole-archive"
+                                             "<LINK_ITEM>"
+                                             "LINKER:--no-whole-archive")
+endif()
+set(CMAKE_LINK_LIBRARY_USING_WHOLE_ARCHIVE_SUPPORTED TRUE)
+
+# Features for LINK_GROUP generator expression
+## RESCAN: request the linker to rescan static libraries until there is
+## no pending undefined symbols
+set(CMAKE_LINK_GROUP_USING_RESCAN "LINKER:--start-group" "LINKER:--end-group")
+set(CMAKE_LINK_GROUP_USING_RESCAN_SUPPORTED TRUE)
+
+
 macro(__windows_compiler_gnu lang)
 
   # Create archiving rules to support large object file lists for static libraries.
@@ -124,7 +157,8 @@ macro(__windows_compiler_gnu lang)
   endif()
 
   if(NOT CMAKE_RC_COMPILER_INIT AND NOT CMAKE_GENERATOR_RC)
-    set(CMAKE_RC_COMPILER_INIT ${_CMAKE_TOOLCHAIN_PREFIX}windres)
+    set(_CMAKE_RC_COMPILER_LIST ${_CMAKE_TOOLCHAIN_PREFIX}windres windres)
+    set(_CMAKE_RC_COMPILER_FALLBACK windres)
   endif()
 
   enable_language(RC)
@@ -144,7 +178,7 @@ macro(__windows_compiler_gnu_abi lang)
 
     # Query the VS Installer tool for locations of VS 2017 and above.
     set(_vs_installer_paths "")
-    foreach(vs RANGE 16 15 -1) # change the first number to the largest supported version
+    foreach(vs RANGE 17 15 -1) # change the first number to the largest supported version
       cmake_host_system_information(RESULT _vs_dir QUERY VS_${vs}_DIR)
       if(_vs_dir)
         list(APPEND _vs_installer_paths "${_vs_dir}/VC/Auxiliary/Build")

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <sstream>
 
+#include <cm/iomanip>
 #include <cmext/algorithm>
 
 #include <cm3p/curl/curl.h>
@@ -55,7 +56,7 @@ private:
   {
     std::string val;
     if (!this->CurrentValue.empty()) {
-      val.assign(&this->CurrentValue[0], this->CurrentValue.size());
+      val.assign(this->CurrentValue.data(), this->CurrentValue.size());
     }
     return val;
   }
@@ -123,7 +124,7 @@ void cmCTestSubmitHandler::Initialize()
 {
   // We submit all available parts by default.
   for (cmCTest::Part p = cmCTest::PartStart; p != cmCTest::PartCount;
-       p = cmCTest::Part(p + 1)) {
+       p = static_cast<cmCTest::Part>(p + 1)) {
     this->SubmitPart[p] = true;
   }
   this->HasWarnings = false;
@@ -216,11 +217,12 @@ bool cmCTestSubmitHandler::SubmitUsingHTTP(
 
       // if there is little to no activity for too long stop submitting
       ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1);
-      ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         SUBMIT_TIMEOUT_IN_SECONDS_DEFAULT);
+      auto submitInactivityTimeout = this->GetSubmitInactivityTimeout();
+      if (submitInactivityTimeout != 0) {
+        ::curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                           submitInactivityTimeout);
+      }
 
-      /* HTTP PUT please */
-      ::curl_easy_setopt(curl, CURLOPT_PUT, 1);
       ::curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);
 
       ::curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -499,7 +501,10 @@ int cmCTestSubmitHandler::HandleCDashUploadFile(std::string const& file,
   std::string curlopt(this->CTest->GetCTestConfiguration("CurlOptions"));
   std::vector<std::string> args = cmExpandedList(curlopt);
   curl.SetCurlOptions(args);
-  curl.SetTimeOutSeconds(SUBMIT_TIMEOUT_IN_SECONDS_DEFAULT);
+  auto submitInactivityTimeout = this->GetSubmitInactivityTimeout();
+  if (submitInactivityTimeout != 0) {
+    curl.SetTimeOutSeconds(submitInactivityTimeout);
+  }
   curl.SetHttpHeaders(this->HttpHeaders);
   std::string url = this->CTest->GetSubmitURL();
   if (!cmHasLiteralPrefix(url, "http://") &&
@@ -711,7 +716,7 @@ int cmCTestSubmitHandler::ProcessHandler()
   cmValue cdashUploadFile = this->GetOption("CDashUploadFile");
   cmValue cdashUploadType = this->GetOption("CDashUploadType");
   if (cdashUploadFile && cdashUploadType) {
-    return this->HandleCDashUploadFile(cdashUploadFile, cdashUploadType);
+    return this->HandleCDashUploadFile(*cdashUploadFile, *cdashUploadType);
   }
 
   const std::string& buildDirectory =
@@ -723,15 +728,15 @@ int cmCTestSubmitHandler::ProcessHandler()
     return -1;
   }
 
-  if (getenv("HTTP_PROXY")) {
+  if (char const* proxy = getenv("HTTP_PROXY")) {
     this->HTTPProxyType = 1;
-    this->HTTPProxy = getenv("HTTP_PROXY");
+    this->HTTPProxy = proxy;
     if (getenv("HTTP_PROXY_PORT")) {
       this->HTTPProxy += ":";
       this->HTTPProxy += getenv("HTTP_PROXY_PORT");
     }
-    if (getenv("HTTP_PROXY_TYPE")) {
-      std::string type = getenv("HTTP_PROXY_TYPE");
+    if (char const* proxy_type = getenv("HTTP_PROXY_TYPE")) {
+      std::string type = proxy_type;
       // HTTP/SOCKS4/SOCKS5
       if (type == "HTTP") {
         this->HTTPProxyType = 1;
@@ -803,7 +808,7 @@ int cmCTestSubmitHandler::ProcessHandler()
 
   // Query parts for files to submit.
   for (cmCTest::Part p = cmCTest::PartStart; p != cmCTest::PartCount;
-       p = cmCTest::Part(p + 1)) {
+       p = static_cast<cmCTest::Part>(p + 1)) {
     // Skip parts we are not submitting.
     if (!this->SubmitPart[p]) {
       continue;
@@ -887,10 +892,29 @@ void cmCTestSubmitHandler::SelectParts(std::set<cmCTest::Part> const& parts)
 {
   // Check whether each part is selected.
   for (cmCTest::Part p = cmCTest::PartStart; p != cmCTest::PartCount;
-       p = cmCTest::Part(p + 1)) {
-    this->SubmitPart[p] =
-      (std::set<cmCTest::Part>::const_iterator(parts.find(p)) != parts.end());
+       p = static_cast<cmCTest::Part>(p + 1)) {
+    this->SubmitPart[p] = parts.find(p) != parts.end();
   }
+}
+
+int cmCTestSubmitHandler::GetSubmitInactivityTimeout()
+{
+  int submitInactivityTimeout = SUBMIT_TIMEOUT_IN_SECONDS_DEFAULT;
+  std::string const& timeoutStr =
+    this->CTest->GetCTestConfiguration("SubmitInactivityTimeout");
+  if (!timeoutStr.empty()) {
+    unsigned long timeout;
+    if (cmStrToULong(timeoutStr, &timeout)) {
+      submitInactivityTimeout = static_cast<int>(timeout);
+    } else {
+      cmCTestLog(this->CTest, ERROR_MESSAGE,
+                 "SubmitInactivityTimeout is invalid: "
+                   << cm::quoted(timeoutStr) << "."
+                   << " Using a default value of "
+                   << SUBMIT_TIMEOUT_IN_SECONDS_DEFAULT << "." << std::endl);
+    }
+  }
+  return submitInactivityTimeout;
 }
 
 void cmCTestSubmitHandler::SelectFiles(std::set<std::string> const& files)

@@ -124,8 +124,8 @@ DebGenerator::DebGenerator(
                     << debianCompressionType << std::endl);
   }
 
-  if (numThreads != nullptr) {
-    if (!cmStrToLong(numThreads, &this->NumThreads)) {
+  if (numThreads) {
+    if (!cmStrToLong(*numThreads, &this->NumThreads)) {
       this->NumThreads = 1;
       cmCPackLogger(cmCPackLog::LOG_ERROR,
                     "Unrecognized number of threads: " << numThreads
@@ -203,7 +203,7 @@ bool DebGenerator::generateDataTar() const
 
   // uid/gid should be the one of the root user, and this root user has
   // always uid/gid equal to 0.
-  data_tar.SetUIDAndGID(0u, 0u);
+  data_tar.SetUIDAndGID(0U, 0U);
   data_tar.SetUNAMEAndGNAME("root", "root");
 
   // now add all directories which have to be compressed
@@ -237,7 +237,7 @@ bool DebGenerator::generateDataTar() const
     cmCPackLogger(cmCPackLog::LOG_DEBUG,
                   "RELATIVEDIR: \"" << relativeDir << "\"" << std::endl);
 
-#ifdef WIN32
+#ifdef _WIN32
     std::string mode_t_adt_filename = file + ":cmake_mode_t";
     cmsys::ifstream permissionStream(mode_t_adt_filename.c_str());
 
@@ -703,11 +703,11 @@ bool cmCPackDebGenerator::createDebPackages()
                  &cmCPackDebGenerator::createDeb);
   cmValue dbgsymdir_path = this->GetOption("GEN_DBGSYMDIR");
   if (this->IsOn("GEN_CPACK_DEBIAN_DEBUGINFO_PACKAGE") && dbgsymdir_path) {
-    retval = make_package(dbgsymdir_path, "GEN_CPACK_DBGSYM_OUTPUT_FILE_NAME",
+    retval = make_package(*dbgsymdir_path, "GEN_CPACK_DBGSYM_OUTPUT_FILE_NAME",
                           &cmCPackDebGenerator::createDbgsymDDeb) &&
       retval;
   }
-  return int(retval);
+  return static_cast<int>(retval);
 }
 
 bool cmCPackDebGenerator::createDeb()
@@ -902,7 +902,7 @@ std::string cmCPackDebGenerator::GetComponentInstallDirNameSuffix(
   }
 
   if (this->componentPackageMethod == ONE_PACKAGE) {
-    return std::string("ALL_COMPONENTS_IN_ONE");
+    return { "ALL_COMPONENTS_IN_ONE" };
   }
   // We have to find the name of the COMPONENT GROUP
   // the current COMPONENT belongs to.

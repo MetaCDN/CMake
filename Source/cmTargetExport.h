@@ -6,7 +6,10 @@
 
 #include <string>
 
+class cmFileSet;
 class cmGeneratorTarget;
+class cmInstallCxxModuleBmiGenerator;
+class cmInstallFileSetGenerator;
 class cmInstallFilesGenerator;
 class cmInstallTargetGenerator;
 
@@ -29,6 +32,8 @@ public:
   cmInstallTargetGenerator* FrameworkGenerator;
   cmInstallTargetGenerator* BundleGenerator;
   cmInstallFilesGenerator* HeaderGenerator;
+  std::map<cmFileSet*, cmInstallFileSetGenerator*> FileSetGenerators;
+  cmInstallCxxModuleBmiGenerator* CxxModuleBmiGenerator;
   ///@}
 
   bool NamelinkOnly = false;

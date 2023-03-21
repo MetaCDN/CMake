@@ -35,11 +35,13 @@ elseif (cxx_std_98 IN_LIST CXX_FEATURES AND cxx_std_11 IN_LIST CXX_FEATURES)
 endif()
 
 configure_file("${RunCMake_SOURCE_DIR}/CMakeLists.txt" "${RunCMake_BINARY_DIR}/CMakeLists.txt" COPYONLY)
+file(READ "${RunCMake_SOURCE_DIR}/CMP0128Common.cmake" cmp0128_common)
 
-macro(test_build)
+function(test_build)
   set(test ${name}-${lang})
 
-  configure_file("${RunCMake_SOURCE_DIR}/${name}.cmake" "${RunCMake_BINARY_DIR}/${test}.cmake" @ONLY)
+  file(READ "${RunCMake_SOURCE_DIR}/${name}.cmake" cmake)
+  file(CONFIGURE OUTPUT "${RunCMake_BINARY_DIR}/${test}.cmake" CONTENT "${cmake}${cmp0128_common}" @ONLY)
   if(EXISTS "${RunCMake_SOURCE_DIR}/${name}-build-check.cmake")
     configure_file("${RunCMake_SOURCE_DIR}/${name}-build-check.cmake" "${RunCMake_BINARY_DIR}/${test}-build-check.cmake" @ONLY)
   endif()
@@ -52,7 +54,7 @@ macro(test_build)
   run_cmake(${test})
   set(RunCMake_TEST_NO_CLEAN 1)
   run_cmake_command(${test}-build ${CMAKE_COMMAND} --build . ${ARGN})
-endmacro()
+endfunction()
 
 # Mangle flags such as they're in verbose build output.
 macro(mangle_flags variable)
@@ -68,7 +70,20 @@ macro(mangle_flags variable)
   list(APPEND flags "${result}")
 endmacro()
 
-function(test_unset_standard)
+function(test_cmp0128_old_same_standard)
+  set(flag "${${lang}${${lang}_STANDARD_DEFAULT}_EXT_FLAG}")
+
+  if(NOT flag)
+    return()
+  endif()
+
+  mangle_flags(flag)
+
+  set(name CMP0128OldSameStandard)
+  test_build(--verbose)
+endfunction()
+
+function(test_cmp0128_new_extensions_opposite)
   if(extensions_opposite)
     set(flag_ext "_EXT")
   endif()
@@ -81,12 +96,18 @@ function(test_unset_standard)
 
   mangle_flags(flag)
 
-  set(name UnsetStandard)
+  # Make sure we enable/disable extensions when:
+  # 1. LANG_STANDARD is unset.
+  set(name CMP0128NewExtensionsStandardUnset)
   set(RunCMake_TEST_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0128=NEW)
+  test_build(--verbose)
+
+  # 2. LANG_STANDARD matches CMAKE_LANG_STANDARD_DEFAULT.
+  set(name CMP0128NewExtensionsStandardDefault)
   test_build(--verbose)
 endfunction()
 
-function(test_no_unnecessary_flag)
+function(test_cmp0128_new_no_unnecessary_flag)
   set(standard_flag "${${lang}${${lang}_STANDARD_DEFAULT}_FLAG}")
   set(extension_flag "${${lang}${${lang}_STANDARD_DEFAULT}_EXT_FLAG}")
 
@@ -97,7 +118,7 @@ function(test_no_unnecessary_flag)
   mangle_flags(standard_flag)
   mangle_flags(extension_flag)
 
-  set(name NoUnnecessaryFlag)
+  set(name CMP0128NewNoUnnecessaryFlag)
   set(RunCMake_TEST_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0128=NEW)
   test_build(--verbose)
 endfunction()
@@ -138,8 +159,9 @@ function(test_lang lang ext)
     set(extensions_opposite ON)
   endif()
 
-  test_unset_standard()
-  test_no_unnecessary_flag()
+  test_cmp0128_new_extensions_opposite()
+  test_cmp0128_new_no_unnecessary_flag()
+  test_cmp0128_old_same_standard()
   test_cmp0128_warn_match()
   test_cmp0128_warn_unset()
 endfunction()

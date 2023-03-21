@@ -3,6 +3,7 @@
 #include "cmake.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,19 +23,23 @@
 #include <cmext/algorithm>
 #include <cmext/string_view>
 
+#if !defined(CMAKE_BOOTSTRAP) && !defined(_WIN32)
+#  include <unistd.h>
+#endif
+
 #include "cmsys/FStream.hxx"
 #include "cmsys/Glob.hxx"
 #include "cmsys/RegularExpression.hxx"
 
 #include "cm_sys_stat.h"
 
+#include "cmBuildOptions.h"
 #include "cmCMakePath.h"
-#include "cmCMakePresetsFile.h"
+#include "cmCMakePresetsGraph.h"
 #include "cmCommandLineArgument.h"
 #include "cmCommands.h"
 #include "cmDocumentation.h"
 #include "cmDocumentationEntry.h"
-#include "cmDocumentationFormatter.h"
 #include "cmDuration.h"
 #include "cmExternalMakefileProjectGenerator.h"
 #include "cmFileTimeCache.h"
@@ -54,6 +59,7 @@
 #include "cmSystemTools.h"
 #include "cmTarget.h"
 #include "cmTargetLinkLibraryType.h"
+#include "cmUVProcessChain.h"
 #include "cmUtils.hxx"
 #include "cmVersionConfig.h"
 #include "cmWorkingDirectory.h"
@@ -61,8 +67,10 @@
 #if !defined(CMAKE_BOOTSTRAP)
 #  include <unordered_map>
 
+#  include <cm3p/curl/curl.h>
 #  include <cm3p/json/writer.h>
 
+#  include "cmConfigureLog.h"
 #  include "cmFileAPI.h"
 #  include "cmGraphVizWriter.h"
 #  include "cmVariableWatch.h"
@@ -80,7 +88,6 @@
 #    include "cmGlobalBorlandMakefileGenerator.h"
 #    include "cmGlobalJOMMakefileGenerator.h"
 #    include "cmGlobalNMakeMakefileGenerator.h"
-#    include "cmGlobalVisualStudio10Generator.h"
 #    include "cmGlobalVisualStudio11Generator.h"
 #    include "cmGlobalVisualStudio12Generator.h"
 #    include "cmGlobalVisualStudio14Generator.h"
@@ -143,20 +150,135 @@ auto IgnoreAndTrueLambda = [](std::string const&, cmake*) -> bool {
 using CommandArgument =
   cmCommandLineArgument<bool(std::string const& value, cmake* state)>;
 
-} // namespace
-
-static bool cmakeCheckStampFile(const std::string& stampName);
-static bool cmakeCheckStampList(const std::string& stampList);
-
 #ifndef CMAKE_BOOTSTRAP
-static void cmWarnUnusedCliWarning(const std::string& variable, int /*unused*/,
-                                   void* ctx, const char* /*unused*/,
-                                   const cmMakefile* /*unused*/)
+void cmWarnUnusedCliWarning(const std::string& variable, int /*unused*/,
+                            void* ctx, const char* /*unused*/,
+                            const cmMakefile* /*unused*/)
 {
   cmake* cm = reinterpret_cast<cmake*>(ctx);
   cm->MarkCliAsUsed(variable);
 }
 #endif
+
+bool cmakeCheckStampFile(const std::string& stampName)
+{
+  // The stamp file does not exist.  Use the stamp dependencies to
+  // determine whether it is really out of date.  This works in
+  // conjunction with cmLocalVisualStudio7Generator to avoid
+  // repeatedly re-running CMake when the user rebuilds the entire
+  // solution.
+  std::string stampDepends = cmStrCat(stampName, ".depend");
+#if defined(_WIN32) || defined(__CYGWIN__)
+  cmsys::ifstream fin(stampDepends.c_str(), std::ios::in | std::ios::binary);
+#else
+  cmsys::ifstream fin(stampDepends.c_str());
+#endif
+  if (!fin) {
+    // The stamp dependencies file cannot be read.  Just assume the
+    // build system is really out of date.
+    std::cout << "CMake is re-running because " << stampName
+              << " dependency file is missing.\n";
+    return false;
+  }
+
+  // Compare the stamp dependencies against the dependency file itself.
+  {
+    cmFileTimeCache ftc;
+    std::string dep;
+    while (cmSystemTools::GetLineFromStream(fin, dep)) {
+      int result;
+      if (!dep.empty() && dep[0] != '#' &&
+          (!ftc.Compare(stampDepends, dep, &result) || result < 0)) {
+        // The stamp depends file is older than this dependency.  The
+        // build system is really out of date.
+        /* clang-format off */
+        std::cout << "CMake is re-running because " << stampName
+                  << " is out-of-date.\n"
+                     "  the file '" << dep << "'\n"
+                     "  is newer than '" << stampDepends << "'\n"
+                     "  result='" << result << "'\n";
+        /* clang-format on */
+        return false;
+      }
+    }
+  }
+
+  // The build system is up to date.  The stamp file has been removed
+  // by the VS IDE due to a "rebuild" request.  Restore it atomically.
+  std::ostringstream stampTempStream;
+  stampTempStream << stampName << ".tmp" << cmSystemTools::RandomSeed();
+  std::string stampTemp = stampTempStream.str();
+  {
+    // TODO: Teach cmGeneratedFileStream to use a random temp file (with
+    // multiple tries in unlikely case of conflict) and use that here.
+    cmsys::ofstream stamp(stampTemp.c_str());
+    stamp << "# CMake generation timestamp file for this directory.\n";
+  }
+  std::string err;
+  if (cmSystemTools::RenameFile(stampTemp, stampName,
+                                cmSystemTools::Replace::Yes, &err) ==
+      cmSystemTools::RenameResult::Success) {
+    // CMake does not need to re-run because the stamp file is up-to-date.
+    return true;
+  }
+  cmSystemTools::RemoveFile(stampTemp);
+  cmSystemTools::Error(
+    cmStrCat("Cannot restore timestamp \"", stampName, "\": ", err));
+  return false;
+}
+
+bool cmakeCheckStampList(const std::string& stampList)
+{
+  // If the stamp list does not exist CMake must rerun to generate it.
+  if (!cmSystemTools::FileExists(stampList)) {
+    std::cout << "CMake is re-running because generate.stamp.list "
+                 "is missing.\n";
+    return false;
+  }
+  cmsys::ifstream fin(stampList.c_str());
+  if (!fin) {
+    std::cout << "CMake is re-running because generate.stamp.list "
+                 "could not be read.\n";
+    return false;
+  }
+
+  // Check each stamp.
+  std::string stampName;
+  while (cmSystemTools::GetLineFromStream(fin, stampName)) {
+    if (!cmakeCheckStampFile(stampName)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
+
+cmDocumentationEntry cmake::CMAKE_STANDARD_OPTIONS_TABLE[18] = {
+  { "-S <path-to-source>", "Explicitly specify a source directory." },
+  { "-B <path-to-build>", "Explicitly specify a build directory." },
+  { "-C <initial-cache>", "Pre-load a script to populate the cache." },
+  { "-D <var>[:<type>]=<value>", "Create or update a cmake cache entry." },
+  { "-U <globbing_expr>", "Remove matching entries from CMake cache." },
+  { "-G <generator-name>", "Specify a build system generator." },
+  { "-T <toolset-name>", "Specify toolset name if supported by generator." },
+  { "-A <platform-name>", "Specify platform name if supported by generator." },
+  { "--toolchain <file>", "Specify toolchain file [CMAKE_TOOLCHAIN_FILE]." },
+  { "--install-prefix <directory>",
+    "Specify install directory [CMAKE_INSTALL_PREFIX]." },
+  { "-Wdev", "Enable developer warnings." },
+  { "-Wno-dev", "Suppress developer warnings." },
+  { "-Werror=dev", "Make developer warnings errors." },
+  { "-Wno-error=dev", "Make developer warnings not errors." },
+  { "-Wdeprecated", "Enable deprecation warnings." },
+  { "-Wno-deprecated", "Suppress deprecation warnings." },
+  { "-Werror=deprecated",
+    "Make deprecated macro and function warnings "
+    "errors." },
+  { "-Wno-error=deprecated",
+    "Make deprecated macro and function warnings "
+    "not errors." }
+};
 
 cmake::cmake(Role role, cmState::Mode mode, cmState::ProjectKind projectKind)
   : CMakeWorkingDirectory(cmSystemTools::GetCurrentWorkingDirectory())
@@ -189,7 +311,7 @@ cmake::cmake(Role role, cmState::Mode mode, cmState::ProjectKind projectKind)
     this->AddProjectCommands();
   }
 
-  if (mode == cmState::Project) {
+  if (mode == cmState::Project || mode == cmState::Help) {
     this->LoadEnvironmentPresets();
   }
 
@@ -205,7 +327,7 @@ cmake::cmake(Role role, cmState::Mode mode, cmState::ProjectKind projectKind)
       exts.ordered.reserve(extList.size());
       for (cm::string_view ext : extList) {
         exts.ordered.emplace_back(ext);
-      };
+      }
       // Fill unordered set
       exts.unordered.insert(exts.ordered.begin(), exts.ordered.end());
     };
@@ -250,6 +372,8 @@ Json::Value cmake::ReportCapabilitiesJson() const
   std::vector<cmake::GeneratorInfo> generatorInfoList;
   this->GetRegisteredGenerators(generatorInfoList);
 
+  auto* curlVersion = curl_version_info(CURLVERSION_FIRST);
+
   JsonValueMapType generatorMap;
   for (cmake::GeneratorInfo const& gi : generatorInfoList) {
     if (gi.isAlias) { // skip aliases, they are there for compatibility reasons
@@ -284,6 +408,7 @@ Json::Value cmake::ReportCapabilitiesJson() const
   obj["generators"] = generators;
   obj["fileApi"] = cmFileAPI::ReportCapabilities();
   obj["serverMode"] = false;
+  obj["tls"] = static_cast<bool>(curlVersion->features & CURL_VERSION_SSL);
 
   return obj;
 }
@@ -404,9 +529,6 @@ void cmake::PrintPresetEnvironment()
 // Parse the args
 bool cmake::SetCacheArgs(const std::vector<std::string>& args)
 {
-  auto findPackageMode = false;
-  auto seenScriptOption = false;
-
   auto DefineLambda = [](std::string const& entry, cmake* state) -> bool {
     std::string var;
     std::string value;
@@ -497,10 +619,10 @@ bool cmake::SetCacheArgs(const std::vector<std::string>& args)
     GetProjectCommandsInScriptMode(state->GetState());
     // Documented behavior of CMAKE{,_CURRENT}_{SOURCE,BINARY}_DIR is to be
     // set to $PWD for -P mode.
+    state->SetWorkingMode(SCRIPT_MODE);
     state->SetHomeDirectory(cmSystemTools::GetCurrentWorkingDirectory());
     state->SetHomeOutputDirectory(cmSystemTools::GetCurrentWorkingDirectory());
     state->ReadListFile(args, path);
-    seenScriptOption = true;
     return true;
   };
 
@@ -543,6 +665,10 @@ bool cmake::SetCacheArgs(const std::vector<std::string>& args)
       "-C", "-C must be followed by a file name.",
       CommandArgument::Values::One, CommandArgument::RequiresSeparator::No,
       [&](std::string const& value, cmake* state) -> bool {
+        if (value.empty()) {
+          cmSystemTools::Error("No file name specified for -C");
+          return false;
+        }
         cmSystemTools::Stdout("loading initial cache file " + value + "\n");
         // Resolve script path specified on command line
         // relative to $PWD.
@@ -560,15 +686,12 @@ bool cmake::SetCacheArgs(const std::vector<std::string>& args)
                      "No install directory specified for --install-prefix",
                      CommandArgument::Values::One, PrefixLambda },
     CommandArgument{ "--find-package", CommandArgument::Values::Zero,
-                     [&](std::string const&, cmake*) -> bool {
-                       findPackageMode = true;
-                       return true;
-                     } },
+                     IgnoreAndTrueLambda },
   };
   for (decltype(args.size()) i = 1; i < args.size(); ++i) {
     std::string const& arg = args[i];
 
-    if (arg == "--" && seenScriptOption) {
+    if (arg == "--" && this->GetWorkingMode() == SCRIPT_MODE) {
       // Stop processing CMake args and avoid possible errors
       // when arbitrary args are given to CMake script.
       break;
@@ -583,7 +706,7 @@ bool cmake::SetCacheArgs(const std::vector<std::string>& args)
     }
   }
 
-  if (findPackageMode) {
+  if (this->GetWorkingMode() == FIND_PACKAGE_MODE) {
     return this->FindPackage(args);
   }
 
@@ -778,6 +901,8 @@ enum class ListPresets
   Configure,
   Build,
   Test,
+  Package,
+  Workflow,
   All,
 };
 }
@@ -788,8 +913,8 @@ void cmake::SetArgs(const std::vector<std::string>& args)
   bool haveToolset = false;
   bool havePlatform = false;
   bool haveBArg = false;
-  bool scriptMode = false;
   std::string possibleUnknownArg;
+  std::string extraProvidedPath;
 #if !defined(CMAKE_BOOTSTRAP)
   std::string profilingFormat;
   std::string profilingOutput;
@@ -798,14 +923,30 @@ void cmake::SetArgs(const std::vector<std::string>& args)
   ListPresets listPresets = ListPresets::None;
 #endif
 
+  auto EmptyStringArgLambda = [](std::string const&, cmake* state) -> bool {
+    state->IssueMessage(
+      MessageType::WARNING,
+      "Ignoring empty string (\"\") provided on the command line.");
+    return true;
+  };
+
   auto SourceArgLambda = [](std::string const& value, cmake* state) -> bool {
+    if (value.empty()) {
+      cmSystemTools::Error("No source directory specified for -S");
+      return false;
+    }
     std::string path = cmSystemTools::CollapseFullPath(value);
     cmSystemTools::ConvertToUnixSlashes(path);
-    state->SetHomeDirectory(path);
+
+    state->SetHomeDirectoryViaCommandLine(path);
     return true;
   };
 
   auto BuildArgLambda = [&](std::string const& value, cmake* state) -> bool {
+    if (value.empty()) {
+      cmSystemTools::Error("No build directory specified for -B");
+      return false;
+    }
     std::string path = cmSystemTools::CollapseFullPath(value);
     cmSystemTools::ConvertToUnixSlashes(path);
     state->SetHomeOutputDirectory(path);
@@ -834,6 +975,7 @@ void cmake::SetArgs(const std::vector<std::string>& args)
   };
 
   std::vector<CommandArgument> arguments = {
+    CommandArgument{ "", CommandArgument::Values::Zero, EmptyStringArgLambda },
     CommandArgument{ "-S", "No source directory specified for -S",
                      CommandArgument::Values::One,
                      CommandArgument::RequiresSeparator::No, SourceArgLambda },
@@ -845,13 +987,15 @@ void cmake::SetArgs(const std::vector<std::string>& args)
     CommandArgument{ "-B", "No build directory specified for -B",
                      CommandArgument::Values::One,
                      CommandArgument::RequiresSeparator::No, BuildArgLambda },
+    CommandArgument{ "--fresh", CommandArgument::Values::Zero,
+                     [](std::string const&, cmake* cm) -> bool {
+                       cm->FreshCache = true;
+                       return true;
+                     } },
     CommandArgument{ "-P", "-P must be followed by a file name.",
                      CommandArgument::Values::One,
                      CommandArgument::RequiresSeparator::No,
-                     [&](std::string const&, cmake*) -> bool {
-                       scriptMode = true;
-                       return true;
-                     } },
+                     IgnoreAndTrueLambda },
     CommandArgument{ "-D", "-D must be followed with VAR=VALUE.",
                      CommandArgument::Values::One,
                      CommandArgument::RequiresSeparator::No,
@@ -933,7 +1077,7 @@ void cmake::SetArgs(const std::vector<std::string>& args)
                      CommandArgument::Values::One,
                      [](std::string const& value, cmake* state) -> bool {
                        const auto logLevel = StringToLogLevel(value);
-                       if (logLevel == LogLevel::LOG_UNDEFINED) {
+                       if (logLevel == Message::LogLevel::LOG_UNDEFINED) {
                          cmSystemTools::Error(
                            "Invalid level specified for --log-level");
                          return false;
@@ -949,7 +1093,7 @@ void cmake::SetArgs(const std::vector<std::string>& args)
                      CommandArgument::Values::One,
                      [](std::string const& value, cmake* state) -> bool {
                        const auto logLevel = StringToLogLevel(value);
-                       if (logLevel == LogLevel::LOG_UNDEFINED) {
+                       if (logLevel == Message::LogLevel::LOG_UNDEFINED) {
                          cmSystemTools::Error(
                            "Invalid level specified for --loglevel");
                          return false;
@@ -968,7 +1112,34 @@ void cmake::SetArgs(const std::vector<std::string>& args)
       "--debug-find", CommandArgument::Values::Zero,
       [](std::string const&, cmake* state) -> bool {
         std::cout << "Running with debug output on for the `find` commands.\n";
-        state->SetDebugFindOutputOn(true);
+        state->SetDebugFindOutput(true);
+        return true;
+      } },
+    CommandArgument{
+      "--debug-find-pkg", "Provide a package argument for --debug-find-pkg",
+      CommandArgument::Values::One, CommandArgument::RequiresSeparator::Yes,
+      [](std::string const& value, cmake* state) -> bool {
+        std::vector<std::string> find_pkgs(cmTokenize(value, ","));
+        std::cout << "Running with debug output on for the 'find' commands "
+                     "for package(s)";
+        for (auto const& v : find_pkgs) {
+          std::cout << ' ' << v;
+          state->SetDebugFindOutputPkgs(v);
+        }
+        std::cout << ".\n";
+        return true;
+      } },
+    CommandArgument{
+      "--debug-find-var", CommandArgument::Values::One,
+      CommandArgument::RequiresSeparator::Yes,
+      [](std::string const& value, cmake* state) -> bool {
+        std::vector<std::string> find_vars(cmTokenize(value, ","));
+        std::cout << "Running with debug output on for the variable(s)";
+        for (auto const& v : find_vars) {
+          std::cout << ' ' << v;
+          state->SetDebugFindOutputVars(v);
+        }
+        std::cout << ".\n";
         return true;
       } },
     CommandArgument{ "--trace-expand", CommandArgument::Values::Zero,
@@ -1026,7 +1197,7 @@ void cmake::SetArgs(const std::vector<std::string>& args)
                      [](std::string const&, cmake* state) -> bool {
                        std::cout
                          << "Not searching for unused variables given on the "
-                         << "command line.\n";
+                            "command line.\n";
                        state->SetWarnUnusedCli(false);
                        return true;
                      } },
@@ -1034,8 +1205,16 @@ void cmake::SetArgs(const std::vector<std::string>& args)
       "--check-system-vars", CommandArgument::Values::Zero,
       [](std::string const&, cmake* state) -> bool {
         std::cout << "Also check system files when warning about unused and "
-                  << "uninitialized variables.\n";
+                     "uninitialized variables.\n";
         state->SetCheckSystemVars(true);
+        return true;
+      } },
+    CommandArgument{
+      "--compile-no-warning-as-error", CommandArgument::Values::Zero,
+      [](std::string const&, cmake* state) -> bool {
+        std::cout << "Ignoring COMPILE_WARNING_AS_ERROR target property and "
+                     "CMAKE_COMPILE_WARNING_AS_ERROR variable.\n";
+        state->SetIgnoreWarningAsError(true);
         return true;
       } }
   };
@@ -1079,12 +1258,16 @@ void cmake::SetArgs(const std::vector<std::string>& args)
         listPresets = ListPresets::Build;
       } else if (value == "test") {
         listPresets = ListPresets::Test;
+      } else if (value == "package") {
+        listPresets = ListPresets::Package;
+      } else if (value == "workflow") {
+        listPresets = ListPresets::Workflow;
       } else if (value == "all") {
         listPresets = ListPresets::All;
       } else {
         cmSystemTools::Error(
           "Invalid value specified for --list-presets.\n"
-          "Valid values are configure, build, test, or all. "
+          "Valid values are configure, build, test, package, or all. "
           "When no value is passed the default is configure.");
         return false;
       }
@@ -1107,6 +1290,12 @@ void cmake::SetArgs(const std::vector<std::string>& args)
   for (decltype(args.size()) i = 1; i < args.size(); ++i) {
     // iterate each argument
     std::string const& arg = args[i];
+
+    if (this->GetWorkingMode() == SCRIPT_MODE && arg == "--") {
+      // Stop processing CMake args and avoid possible errors
+      // when arbitrary args are given to CMake script.
+      break;
+    }
 
     // Generator flag has special handling for when to print help
     // so it becomes the exception
@@ -1141,11 +1330,19 @@ void cmake::SetArgs(const std::vector<std::string>& args)
     } else if (!matched && cmHasLiteralPrefix(arg, "-")) {
       possibleUnknownArg = arg;
     } else if (!matched) {
-      this->SetDirectoriesFromFile(arg);
+      bool parsedDirectory = this->SetDirectoriesFromFile(arg);
+      if (!parsedDirectory) {
+        extraProvidedPath = arg;
+      }
     }
   }
 
-  if (!possibleUnknownArg.empty() && !scriptMode) {
+  if (!extraProvidedPath.empty() && this->GetWorkingMode() == NORMAL_MODE) {
+    this->IssueMessage(MessageType::WARNING,
+                       cmStrCat("Ignoring extra path from command line:\n \"",
+                                extraProvidedPath, "\""));
+  }
+  if (!possibleUnknownArg.empty() && this->GetWorkingMode() != SCRIPT_MODE) {
     cmSystemTools::Error(cmStrCat("Unknown argument ", possibleUnknownArg));
     cmSystemTools::Error("Run 'cmake --help' for all supported options.");
     exit(1);
@@ -1212,43 +1409,51 @@ void cmake::SetArgs(const std::vector<std::string>& args)
 
 #if !defined(CMAKE_BOOTSTRAP)
   if (listPresets != ListPresets::None || !presetName.empty()) {
-    cmCMakePresetsFile settingsFile;
-    auto result = settingsFile.ReadProjectPresets(this->GetHomeDirectory());
-    if (result != cmCMakePresetsFile::ReadFileResult::READ_OK) {
-      cmSystemTools::Error(
+    cmCMakePresetsGraph presetsGraph;
+    auto result = presetsGraph.ReadProjectPresets(this->GetHomeDirectory());
+    if (result != cmCMakePresetsGraph::ReadFileResult::READ_OK) {
+      std::string errorMsg =
         cmStrCat("Could not read presets from ", this->GetHomeDirectory(),
-                 ": ", cmCMakePresetsFile::ResultToString(result)));
+                 ": ", cmCMakePresetsGraph::ResultToString(result));
+      if (!presetsGraph.errors.empty()) {
+        errorMsg = cmStrCat(errorMsg, "\nErrors:\n", presetsGraph.errors);
+      }
+      cmSystemTools::Error(errorMsg);
       return;
     }
 
     if (listPresets != ListPresets::None) {
       if (listPresets == ListPresets::Configure) {
-        this->PrintPresetList(settingsFile);
+        this->PrintPresetList(presetsGraph);
       } else if (listPresets == ListPresets::Build) {
-        settingsFile.PrintBuildPresetList();
+        presetsGraph.PrintBuildPresetList();
       } else if (listPresets == ListPresets::Test) {
-        settingsFile.PrintTestPresetList();
+        presetsGraph.PrintTestPresetList();
+      } else if (listPresets == ListPresets::Package) {
+        presetsGraph.PrintPackagePresetList();
+      } else if (listPresets == ListPresets::Workflow) {
+        presetsGraph.PrintWorkflowPresetList();
       } else if (listPresets == ListPresets::All) {
-        settingsFile.PrintAllPresets();
+        presetsGraph.PrintAllPresets();
       }
 
       this->SetWorkingMode(WorkingMode::HELP_MODE);
       return;
     }
 
-    auto preset = settingsFile.ConfigurePresets.find(presetName);
-    if (preset == settingsFile.ConfigurePresets.end()) {
+    auto preset = presetsGraph.ConfigurePresets.find(presetName);
+    if (preset == presetsGraph.ConfigurePresets.end()) {
       cmSystemTools::Error(cmStrCat("No such preset in ",
                                     this->GetHomeDirectory(), ": \"",
                                     presetName, '"'));
-      this->PrintPresetList(settingsFile);
+      this->PrintPresetList(presetsGraph);
       return;
     }
     if (preset->second.Unexpanded.Hidden) {
       cmSystemTools::Error(cmStrCat("Cannot use hidden preset in ",
                                     this->GetHomeDirectory(), ": \"",
                                     presetName, '"'));
-      this->PrintPresetList(settingsFile);
+      this->PrintPresetList(presetsGraph);
       return;
     }
     auto const& expandedPreset = preset->second.Expanded;
@@ -1292,14 +1497,14 @@ void cmake::SetArgs(const std::vector<std::string>& args)
 
     if (!expandedPreset->ArchitectureStrategy ||
         expandedPreset->ArchitectureStrategy ==
-          cmCMakePresetsFile::ArchToolsetStrategy::Set) {
+          cmCMakePresetsGraph::ArchToolsetStrategy::Set) {
       if (!this->GeneratorPlatformSet) {
         this->SetGeneratorPlatform(expandedPreset->Architecture);
       }
     }
     if (!expandedPreset->ToolsetStrategy ||
         expandedPreset->ToolsetStrategy ==
-          cmCMakePresetsFile::ArchToolsetStrategy::Set) {
+          cmCMakePresetsGraph::ArchToolsetStrategy::Set) {
       if (!this->GeneratorToolsetSet) {
         this->SetGeneratorToolset(expandedPreset->Toolset);
       }
@@ -1325,29 +1530,58 @@ void cmake::SetArgs(const std::vector<std::string>& args)
       this->DebugTryCompileOn();
     }
     if (expandedPreset->DebugFind == true) {
-      this->SetDebugFindOutputOn(true);
+      this->SetDebugFindOutput(true);
     }
   }
 #endif
 }
 
-cmake::LogLevel cmake::StringToLogLevel(const std::string& levelStr)
+namespace {
+using LevelsPair = std::pair<cm::string_view, Message::LogLevel>;
+using LevelsPairArray = std::array<LevelsPair, 7>;
+const LevelsPairArray& getStringToLogLevelPairs()
 {
-  using LevelsPair = std::pair<std::string, LogLevel>;
-  static const std::vector<LevelsPair> levels = {
-    { "error", LogLevel::LOG_ERROR },     { "warning", LogLevel::LOG_WARNING },
-    { "notice", LogLevel::LOG_NOTICE },   { "status", LogLevel::LOG_STATUS },
-    { "verbose", LogLevel::LOG_VERBOSE }, { "debug", LogLevel::LOG_DEBUG },
-    { "trace", LogLevel::LOG_TRACE }
+  static const LevelsPairArray levels = {
+    { { "error", Message::LogLevel::LOG_ERROR },
+      { "warning", Message::LogLevel::LOG_WARNING },
+      { "notice", Message::LogLevel::LOG_NOTICE },
+      { "status", Message::LogLevel::LOG_STATUS },
+      { "verbose", Message::LogLevel::LOG_VERBOSE },
+      { "debug", Message::LogLevel::LOG_DEBUG },
+      { "trace", Message::LogLevel::LOG_TRACE } }
   };
+  return levels;
+}
+} // namespace
 
-  const auto levelStrLowCase = cmSystemTools::LowerCase(levelStr);
+Message::LogLevel cmake::StringToLogLevel(cm::string_view levelStr)
+{
+  const LevelsPairArray& levels = getStringToLogLevelPairs();
 
+  const auto levelStrLowCase =
+    cmSystemTools::LowerCase(std::string{ levelStr });
+
+  // NOLINTNEXTLINE(readability-qualified-auto)
   const auto it = std::find_if(levels.cbegin(), levels.cend(),
                                [&levelStrLowCase](const LevelsPair& p) {
                                  return p.first == levelStrLowCase;
                                });
-  return (it != levels.cend()) ? it->second : LogLevel::LOG_UNDEFINED;
+  return (it != levels.cend()) ? it->second : Message::LogLevel::LOG_UNDEFINED;
+}
+
+std::string cmake::LogLevelToString(Message::LogLevel level)
+{
+  const LevelsPairArray& levels = getStringToLogLevelPairs();
+
+  // NOLINTNEXTLINE(readability-qualified-auto)
+  const auto it =
+    std::find_if(levels.cbegin(), levels.cend(),
+                 [&level](const LevelsPair& p) { return p.second == level; });
+  const cm::string_view levelStrLowerCase =
+    (it != levels.cend()) ? it->first : "undefined";
+  std::string levelStrUpperCase =
+    cmSystemTools::UpperCase(std::string{ levelStrLowerCase });
+  return levelStrUpperCase;
 }
 
 cmake::TraceFormat cmake::StringToTraceFormat(const std::string& traceStr)
@@ -1378,7 +1612,7 @@ void cmake::SetTraceFile(const std::string& file)
     cmSystemTools::Error(ss.str());
     return;
   }
-  std::cout << "Trace will be written to " << file << "\n";
+  std::cout << "Trace will be written to " << file << '\n';
 }
 
 void cmake::PrintTraceFormatVersion()
@@ -1397,7 +1631,7 @@ void cmake::PrintTraceFormatVersion()
       Json::StreamWriterBuilder builder;
       builder["indentation"] = "";
       version["major"] = 1;
-      version["minor"] = 1;
+      version["minor"] = 2;
       val["version"] = version;
       msg = Json::writeString(builder, val);
 #endif
@@ -1423,26 +1657,41 @@ void cmake::PrintTraceFormatVersion()
   }
 }
 
-void cmake::SetDirectoriesFromFile(const std::string& arg)
+void cmake::SetTraceRedirect(cmake* other)
+{
+  this->Trace = other->Trace;
+  this->TraceExpand = other->TraceExpand;
+  this->TraceFormatVar = other->TraceFormatVar;
+  this->TraceOnlyThisSources = other->TraceOnlyThisSources;
+
+  this->TraceRedirect = other;
+}
+
+bool cmake::SetDirectoriesFromFile(const std::string& arg)
 {
   // Check if the argument refers to a CMakeCache.txt or
   // CMakeLists.txt file.
   std::string listPath;
   std::string cachePath;
-  bool argIsFile = false;
+  bool is_source_dir = false;
+  bool is_empty_directory = false;
   if (cmSystemTools::FileIsDirectory(arg)) {
     std::string path = cmSystemTools::CollapseFullPath(arg);
     cmSystemTools::ConvertToUnixSlashes(path);
     std::string cacheFile = cmStrCat(path, "/CMakeCache.txt");
     std::string listFile = cmStrCat(path, "/CMakeLists.txt");
+
+    is_empty_directory = true;
     if (cmSystemTools::FileExists(cacheFile)) {
       cachePath = path;
+      is_empty_directory = false;
     }
     if (cmSystemTools::FileExists(listFile)) {
       listPath = path;
+      is_empty_directory = false;
+      is_source_dir = true;
     }
   } else if (cmSystemTools::FileExists(arg)) {
-    argIsFile = true;
     std::string fullPath = cmSystemTools::CollapseFullPath(arg);
     std::string name = cmSystemTools::GetFilenameName(fullPath);
     name = cmSystemTools::LowerCase(name);
@@ -1458,7 +1707,6 @@ void cmake::SetDirectoriesFromFile(const std::string& arg)
     std::string name = cmSystemTools::GetFilenameName(fullPath);
     name = cmSystemTools::LowerCase(name);
     if (name == "cmakecache.txt"_s || name == "cmakelists.txt"_s) {
-      argIsFile = true;
       listPath = cmSystemTools::GetFilenamePath(fullPath);
     } else {
       listPath = fullPath;
@@ -1473,42 +1721,60 @@ void cmake::SetDirectoriesFromFile(const std::string& arg)
       if (existingValue) {
         this->SetHomeOutputDirectory(cachePath);
         this->SetHomeDirectory(*existingValue);
-        return;
+        return true;
       }
     }
   }
+
+  bool no_source_tree = this->GetHomeDirectory().empty();
+  bool no_build_tree = this->GetHomeOutputDirectory().empty();
+
+  // When invoked with a path that points to an existing CMakeCache
+  // This function is called multiple times with the same path
+  const bool passed_same_path = (listPath == this->GetHomeDirectory()) ||
+    (listPath == this->GetHomeOutputDirectory());
+  bool used_provided_path =
+    (passed_same_path || is_source_dir || no_build_tree);
 
   // If there is a CMakeLists.txt file, use it as the source tree.
   if (!listPath.empty()) {
-    this->SetHomeDirectory(listPath);
-
-    if (argIsFile) {
-      // Source CMakeLists.txt file given.  It was probably dropped
-      // onto the executable in a GUI.  Default to an in-source build.
-      this->SetHomeOutputDirectory(listPath);
-    } else {
-      // Source directory given on command line.  Use current working
-      // directory as build tree if -B hasn't been given already
-      if (this->GetHomeOutputDirectory().empty()) {
+    // When invoked with a path that points to an existing CMakeCache
+    // This function is called multiple times with the same path
+    if (is_source_dir) {
+      this->SetHomeDirectoryViaCommandLine(listPath);
+      if (no_build_tree) {
         std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
         this->SetHomeOutputDirectory(cwd);
       }
+    } else if (no_source_tree && no_build_tree) {
+      this->SetHomeDirectory(listPath);
+
+      std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
+      this->SetHomeOutputDirectory(cwd);
+    } else if (no_build_tree) {
+      this->SetHomeOutputDirectory(listPath);
     }
-    return;
+  } else {
+    if (no_source_tree) {
+      // We didn't find a CMakeLists.txt and it wasn't specified
+      // with -S. Assume it is the path to the source tree
+      std::string full = cmSystemTools::CollapseFullPath(arg);
+      this->SetHomeDirectory(full);
+    }
+    if (no_build_tree && !no_source_tree && is_empty_directory) {
+      // passed `-S <path> <build_dir> when build_dir is an empty directory
+      std::string full = cmSystemTools::CollapseFullPath(arg);
+      this->SetHomeOutputDirectory(full);
+    } else if (no_build_tree) {
+      // We didn't find a CMakeCache.txt and it wasn't specified
+      // with -B. Assume the current working directory as the build tree.
+      std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
+      this->SetHomeOutputDirectory(cwd);
+      used_provided_path = false;
+    }
   }
 
-  if (this->GetHomeDirectory().empty()) {
-    // We didn't find a CMakeLists.txt and it wasn't specified
-    // with -S. Assume it is the path to the source tree
-    std::string full = cmSystemTools::CollapseFullPath(arg);
-    this->SetHomeDirectory(full);
-  }
-  if (this->GetHomeOutputDirectory().empty()) {
-    // We didn't find a CMakeCache.txt and it wasn't specified
-    // with -B. Assume the current working directory as the build tree.
-    std::string cwd = cmSystemTools::GetCurrentWorkingDirectory();
-    this->SetHomeOutputDirectory(cwd);
-  }
+  return used_provided_path;
 }
 
 // at the end of this CMAKE_ROOT and CMAKE_COMMAND should be added to the
@@ -1680,12 +1946,12 @@ bool cmake::CreateAndSetGlobalGenerator(const std::string& name,
 }
 
 #ifndef CMAKE_BOOTSTRAP
-void cmake::PrintPresetList(const cmCMakePresetsFile& file) const
+void cmake::PrintPresetList(const cmCMakePresetsGraph& graph) const
 {
   std::vector<GeneratorInfo> generators;
   this->GetRegisteredGenerators(generators, false);
   auto filter =
-    [&generators](const cmCMakePresetsFile::ConfigurePreset& preset) -> bool {
+    [&generators](const cmCMakePresetsGraph::ConfigurePreset& preset) -> bool {
     if (preset.Generator.empty()) {
       return true;
     }
@@ -1696,15 +1962,37 @@ void cmake::PrintPresetList(const cmCMakePresetsFile& file) const
     return it != generators.end();
   };
 
-  file.PrintConfigurePresetList(filter);
+  graph.PrintConfigurePresetList(filter);
 }
 #endif
+
+void cmake::SetHomeDirectoryViaCommandLine(std::string const& path)
+{
+  if (path.empty()) {
+    return;
+  }
+
+  auto prev_path = this->GetHomeDirectory();
+  if (prev_path != path && !prev_path.empty() &&
+      this->GetWorkingMode() == NORMAL_MODE) {
+    this->IssueMessage(MessageType::WARNING,
+                       cmStrCat("Ignoring extra path from command line:\n \"",
+                                prev_path, "\""));
+  }
+  this->SetHomeDirectory(path);
+}
 
 void cmake::SetHomeDirectory(const std::string& dir)
 {
   this->State->SetSourceDirectory(dir);
   if (this->CurrentSnapshot.IsValid()) {
     this->CurrentSnapshot.SetDefinition("CMAKE_SOURCE_DIR", dir);
+  }
+
+  if (this->State->GetProjectKind() == cmState::ProjectKind::Normal) {
+    this->Messenger->SetTopSource(this->GetHomeDirectory());
+  } else {
+    this->Messenger->SetTopSource(cm::nullopt);
   }
 }
 
@@ -1847,12 +2135,10 @@ int cmake::HandleDeleteCacheVariables(const std::string& var)
   }
   std::vector<SaveCacheEntry> saved;
   std::ostringstream warning;
-  /* clang-format off */
   warning
     << "You have changed variables that require your cache to be deleted.\n"
-    << "Configure will be re-run and you may have to reset some variables.\n"
-    << "The following variables have changed:\n";
-  /* clang-format on */
+       "Configure will be re-run and you may have to reset some variables.\n"
+       "The following variables have changed:\n";
   for (auto i = argsSplit.begin(); i != argsSplit.end(); ++i) {
     SaveCacheEntry save;
     save.key = *i;
@@ -1860,9 +2146,9 @@ int cmake::HandleDeleteCacheVariables(const std::string& var)
     i++;
     if (i != argsSplit.end()) {
       save.value = *i;
-      warning << *i << "\n";
+      warning << *i << '\n';
     } else {
-      warning << "\n";
+      warning << '\n';
       i -= 1;
     }
     cmValue existingValue = this->State->GetCacheEntryValue(save.key);
@@ -1888,7 +2174,7 @@ int cmake::HandleDeleteCacheVariables(const std::string& var)
   }
   cmSystemTools::Message(warning.str());
   // avoid reconfigure if there were errors
-  if (!cmSystemTools::GetErrorOccuredFlag()) {
+  if (!cmSystemTools::GetErrorOccurredFlag()) {
     // re-run configure
     return this->Configure();
   }
@@ -1897,6 +2183,10 @@ int cmake::HandleDeleteCacheVariables(const std::string& var)
 
 int cmake::Configure()
 {
+#if !defined(CMAKE_BOOTSTRAP)
+  auto profilingRAII = this->CreateProfilingEntry("project", "configure");
+#endif
+
   DiagLevel diagLevel;
 
   if (this->DiagLevels.count("deprecated") == 1) {
@@ -1985,6 +2275,9 @@ int cmake::ActualConfigure()
   this->UpdateConversionPathTable();
   this->CleanupCommandsAndMacros();
 
+  cmSystemTools::RemoveADirectory(this->GetHomeOutputDirectory() +
+                                  "/CMakeFiles/CMakeScratch");
+
   int res = this->DoPreConfigureChecks();
   if (res < 0) {
     return -2;
@@ -1996,6 +2289,21 @@ int cmake::ActualConfigure()
       "project",
       cmStateEnums::INTERNAL);
   }
+
+  // We want to create the package redirects directory as early as possible,
+  // but not before pre-configure checks have passed. This ensures we get
+  // errors about inappropriate source/binary directories first.
+  const auto redirectsDir =
+    cmStrCat(this->GetHomeOutputDirectory(), "/CMakeFiles/pkgRedirects");
+  cmSystemTools::RemoveADirectory(redirectsDir);
+  if (!cmSystemTools::MakeDirectory(redirectsDir)) {
+    cmSystemTools::Error(
+      "Unable to (re)create the private pkgRedirects directory:\n" +
+      redirectsDir);
+    return -1;
+  }
+  this->AddCacheEntry("CMAKE_FIND_PACKAGE_REDIRECTS_DIR", redirectsDir,
+                      "Value Computed by CMake.", cmStateEnums::STATIC);
 
   // no generator specified on the command line
   if (!this->GlobalGenerator) {
@@ -2108,18 +2416,27 @@ int cmake::ActualConfigure()
   // info to save time
   if (!this->GetIsInTryCompile()) {
     this->GlobalGenerator->ClearEnabledLanguages();
-
-    this->TruncateOutputLog("CMakeOutput.log");
-    this->TruncateOutputLog("CMakeError.log");
   }
 
 #if !defined(CMAKE_BOOTSTRAP)
   this->FileAPI = cm::make_unique<cmFileAPI>(this);
   this->FileAPI->ReadQueries();
+
+  if (!this->GetIsInTryCompile()) {
+    this->TruncateOutputLog("CMakeConfigureLog.yaml");
+    this->ConfigureLog = cm::make_unique<cmConfigureLog>(
+      cmStrCat(this->GetHomeOutputDirectory(), "/CMakeFiles"_s),
+      this->FileAPI->GetConfigureLogVersions());
+  }
 #endif
 
   // actually do the configure
   this->GlobalGenerator->Configure();
+
+#if !defined(CMAKE_BOOTSTRAP)
+  this->ConfigureLog.reset();
+#endif
+
   // Before saving the cache
   // if the project did not define one of the entries below, add them now
   // so users can edit the values in the cache:
@@ -2155,9 +2472,10 @@ int cmake::ActualConfigure()
       "CMakeLists.txt ?");
   }
 
-  this->State->SaveVerificationScript(this->GetHomeOutputDirectory());
+  this->State->SaveVerificationScript(this->GetHomeOutputDirectory(),
+                                      this->Messenger.get());
   this->SaveCache(this->GetHomeOutputDirectory());
-  if (cmSystemTools::GetErrorOccuredFlag()) {
+  if (cmSystemTools::GetErrorOccurredFlag()) {
     return -1;
   }
   return 0;
@@ -2192,7 +2510,6 @@ std::unique_ptr<cmGlobalGenerator> cmake::EvaluateDefaultGlobalGenerator()
     { "14.0", "Visual Studio 14 2015" }, //
     { "12.0", "Visual Studio 12 2013" }, //
     { "11.0", "Visual Studio 11 2012" }, //
-    { "10.0", "Visual Studio 10 2010" }, //
     { "9.0", "Visual Studio 9 2008" }
   };
   static const char* const vsEntries[] = {
@@ -2242,7 +2559,7 @@ void cmake::CreateDefaultGlobalGenerator()
   auto gen = this->EvaluateDefaultGlobalGenerator();
 #if defined(_WIN32) && !defined(__CYGWIN__) && !defined(CMAKE_BOOT_MINGW)
   // This print could be unified for all platforms
-  std::cout << "-- Building for: " << gen->GetName() << "\n";
+  std::cout << "-- Building for: " << gen->GetName() << '\n';
 #endif
   this->SetGlobalGenerator(std::move(gen));
 }
@@ -2271,7 +2588,7 @@ int cmake::Run(const std::vector<std::string>& args, bool noconfigure)
 {
   // Process the arguments
   this->SetArgs(args);
-  if (cmSystemTools::GetErrorOccuredFlag()) {
+  if (cmSystemTools::GetErrorOccurredFlag()) {
     return -1;
   }
   if (this->GetWorkingMode() == HELP_MODE) {
@@ -2296,12 +2613,19 @@ int cmake::Run(const std::vector<std::string>& args, bool noconfigure)
   }
 
   if (this->GetWorkingMode() == NORMAL_MODE) {
+    if (this->FreshCache) {
+      this->DeleteCache(this->GetHomeOutputDirectory());
+    }
     // load the cache
     if (this->LoadCache() < 0) {
       cmSystemTools::Error("Error executing cmake::LoadCache(). Aborting.\n");
       return -1;
     }
   } else {
+    if (this->FreshCache) {
+      cmSystemTools::Error("--fresh allowed only when configuring a project");
+      return -1;
+    }
     this->AddCMakePaths();
   }
 
@@ -2321,7 +2645,7 @@ int cmake::Run(const std::vector<std::string>& args, bool noconfigure)
 
   // In script mode we terminate after running the script.
   if (this->GetWorkingMode() != NORMAL_MODE) {
-    if (cmSystemTools::GetErrorOccuredFlag()) {
+    if (cmSystemTools::GetErrorOccurredFlag()) {
       return -1;
     }
     return 0;
@@ -2384,18 +2708,23 @@ int cmake::Generate()
   if (!this->GlobalGenerator) {
     return -1;
   }
+
+#if !defined(CMAKE_BOOTSTRAP)
+  auto profilingRAII = this->CreateProfilingEntry("project", "generate");
+#endif
+
   if (!this->GlobalGenerator->Compute()) {
     return -1;
   }
   this->GlobalGenerator->Generate();
   if (!this->GraphVizFile.empty()) {
-    std::cout << "Generate graphviz: " << this->GraphVizFile << std::endl;
+    std::cout << "Generate graphviz: " << this->GraphVizFile << '\n';
     this->GenerateGraphViz(this->GraphVizFile);
   }
   if (this->WarnUnusedCli) {
     this->RunCheckForUnusedVariables();
   }
-  if (cmSystemTools::GetErrorOccuredFlag()) {
+  if (cmSystemTools::GetErrorOccurredFlag()) {
     return -1;
   }
   // Save the cache again after a successful Generate so that any internal
@@ -2414,7 +2743,7 @@ void cmake::AddCacheEntry(const std::string& key, cmValue value,
                           const char* helpString, int type)
 {
   this->State->AddCacheEntry(key, value, helpString,
-                             cmStateEnums::CacheEntryType(type));
+                             static_cast<cmStateEnums::CacheEntryType>(type));
   this->UnwatchUnusedCli(key);
 
   if (key == "CMAKE_WARN_DEPRECATED"_s) {
@@ -2452,7 +2781,7 @@ void cmake::AddGlobCacheEntry(bool recurse, bool listDirectories,
 {
   this->State->AddGlobCacheEntry(recurse, listDirectories, followSymlinks,
                                  relative, expression, files, variable,
-                                 backtrace);
+                                 backtrace, this->Messenger.get());
 }
 
 std::vector<std::string> cmake::GetAllExtensions() const
@@ -2514,7 +2843,6 @@ void cmake::AddDefaultGenerators()
   this->Generators.push_back(cmGlobalVisualStudio14Generator::NewFactory());
   this->Generators.push_back(cmGlobalVisualStudio12Generator::NewFactory());
   this->Generators.push_back(cmGlobalVisualStudio11Generator::NewFactory());
-  this->Generators.push_back(cmGlobalVisualStudio10Generator::NewFactory());
   this->Generators.push_back(cmGlobalVisualStudio9Generator::NewFactory());
   this->Generators.push_back(cmGlobalBorlandMakefileGenerator::NewFactory());
   this->Generators.push_back(cmGlobalNMakeMakefileGenerator::NewFactory());
@@ -2631,17 +2959,15 @@ void cmake::AppendGlobalGeneratorsDocumentation(
   std::vector<cmDocumentationEntry>& v)
 {
   const auto defaultGenerator = this->EvaluateDefaultGlobalGenerator();
-  const std::string defaultName = defaultGenerator->GetName();
-  bool foundDefaultOne = false;
+  const auto defaultName = defaultGenerator->GetName();
+  auto foundDefaultOne = false;
 
   for (const auto& g : this->Generators) {
-    cmDocumentationEntry e;
-    g->GetDocumentation(e);
-    if (!foundDefaultOne && cmHasPrefix(e.Name, defaultName)) {
-      e.CustomNamePrefix = '*';
+    v.emplace_back(g->GetDocumentation());
+    if (!foundDefaultOne && cmHasPrefix(v.back().Name, defaultName)) {
+      v.back().CustomNamePrefix = '*';
       foundDefaultOne = true;
     }
-    v.push_back(std::move(e));
   }
 }
 
@@ -2654,21 +2980,14 @@ void cmake::AppendExtraGeneratorsDocumentation(
 
     // Aliases:
     for (std::string const& a : eg->Aliases) {
-      cmDocumentationEntry e;
-      e.Name = a;
-      e.Brief = doc;
-      v.push_back(std::move(e));
+      v.emplace_back(cmDocumentationEntry{ a, doc });
     }
 
     // Full names:
-    const std::vector<std::string> generators =
-      eg->GetSupportedGlobalGenerators();
-    for (std::string const& g : generators) {
-      cmDocumentationEntry e;
-      e.Name =
-        cmExternalMakefileProjectGenerator::CreateFullGeneratorName(g, name);
-      e.Brief = doc;
-      v.push_back(std::move(e));
+    for (std::string const& g : eg->GetSupportedGlobalGenerators()) {
+      v.emplace_back(cmDocumentationEntry{
+        cmExternalMakefileProjectGenerator::CreateFullGeneratorName(g, name),
+        doc });
     }
   }
 }
@@ -2687,7 +3006,7 @@ void cmake::PrintGeneratorList()
   cmDocumentation doc;
   auto generators = this->GetGeneratorsDocumentation();
   doc.AppendSection("Generators", generators);
-  std::cerr << "\n";
+  std::cerr << '\n';
   doc.PrintDocumentation(cmDocumentation::ListGenerators, std::cerr);
 #endif
 }
@@ -2739,7 +3058,7 @@ int cmake::CheckBuildSystem()
     if (verbose) {
       std::ostringstream msg;
       msg << "Re-run cmake missing file: " << this->CheckBuildSystemArgument
-          << "\n";
+          << '\n';
       cmSystemTools::Stdout(msg.str());
     }
     return 1;
@@ -2755,11 +3074,11 @@ int cmake::CheckBuildSystem()
   cmGlobalGenerator gg(&cm);
   cmMakefile mf(&gg, cm.GetCurrentSnapshot());
   if (!mf.ReadListFile(this->CheckBuildSystemArgument) ||
-      cmSystemTools::GetErrorOccuredFlag()) {
+      cmSystemTools::GetErrorOccurredFlag()) {
     if (verbose) {
       std::ostringstream msg;
       msg << "Re-run cmake error reading : " << this->CheckBuildSystemArgument
-          << "\n";
+          << '\n';
       cmSystemTools::Stdout(msg.str());
     }
     // There was an error reading the file.  Just rerun.
@@ -2790,9 +3109,8 @@ int cmake::CheckBuildSystem()
   for (std::string const& p : products) {
     if (!(cmSystemTools::FileExists(p) || cmSystemTools::FileIsSymlink(p))) {
       if (verbose) {
-        std::ostringstream msg;
-        msg << "Re-run cmake, missing byproduct: " << p << "\n";
-        cmSystemTools::Stdout(msg.str());
+        cmSystemTools::Stdout(
+          cmStrCat("Re-run cmake, missing byproduct: ", p, '\n'));
       }
       return 1;
     }
@@ -2857,7 +3175,7 @@ int cmake::CheckBuildSystem()
       if (verbose) {
         std::ostringstream msg;
         msg << "Re-run cmake file: " << out_oldest
-            << " older than: " << dep_newest << "\n";
+            << " older than: " << dep_newest << '\n';
         cmSystemTools::Stdout(msg.str());
       }
       return 1;
@@ -3033,7 +3351,7 @@ int cmake::GetSystemInformation(std::vector<std::string>& args)
       // permissions are questionable or some other process has deleted the
       // directory
       std::cerr << "Failed to change to directory " << destPath << " : "
-                << std::strerror(workdir.GetLastResult()) << std::endl;
+                << std::strerror(workdir.GetLastResult()) << '\n';
       return 1;
     }
     std::vector<std::string> args2;
@@ -3070,96 +3388,6 @@ int cmake::GetSystemInformation(std::vector<std::string>& args)
   return 0;
 }
 
-static bool cmakeCheckStampFile(const std::string& stampName)
-{
-  // The stamp file does not exist.  Use the stamp dependencies to
-  // determine whether it is really out of date.  This works in
-  // conjunction with cmLocalVisualStudio7Generator to avoid
-  // repeatedly re-running CMake when the user rebuilds the entire
-  // solution.
-  std::string stampDepends = cmStrCat(stampName, ".depend");
-#if defined(_WIN32) || defined(__CYGWIN__)
-  cmsys::ifstream fin(stampDepends.c_str(), std::ios::in | std::ios::binary);
-#else
-  cmsys::ifstream fin(stampDepends.c_str());
-#endif
-  if (!fin) {
-    // The stamp dependencies file cannot be read.  Just assume the
-    // build system is really out of date.
-    std::cout << "CMake is re-running because " << stampName
-              << " dependency file is missing.\n";
-    return false;
-  }
-
-  // Compare the stamp dependencies against the dependency file itself.
-  {
-    cmFileTimeCache ftc;
-    std::string dep;
-    while (cmSystemTools::GetLineFromStream(fin, dep)) {
-      int result;
-      if (!dep.empty() && dep[0] != '#' &&
-          (!ftc.Compare(stampDepends, dep, &result) || result < 0)) {
-        // The stamp depends file is older than this dependency.  The
-        // build system is really out of date.
-        std::cout << "CMake is re-running because " << stampName
-                  << " is out-of-date.\n";
-        std::cout << "  the file '" << dep << "'\n";
-        std::cout << "  is newer than '" << stampDepends << "'\n";
-        std::cout << "  result='" << result << "'\n";
-        return false;
-      }
-    }
-  }
-
-  // The build system is up to date.  The stamp file has been removed
-  // by the VS IDE due to a "rebuild" request.  Restore it atomically.
-  std::ostringstream stampTempStream;
-  stampTempStream << stampName << ".tmp" << cmSystemTools::RandomSeed();
-  std::string stampTemp = stampTempStream.str();
-  {
-    // TODO: Teach cmGeneratedFileStream to use a random temp file (with
-    // multiple tries in unlikely case of conflict) and use that here.
-    cmsys::ofstream stamp(stampTemp.c_str());
-    stamp << "# CMake generation timestamp file for this directory.\n";
-  }
-  std::string err;
-  if (cmSystemTools::RenameFile(stampTemp, stampName,
-                                cmSystemTools::Replace::Yes, &err) ==
-      cmSystemTools::RenameResult::Success) {
-    // CMake does not need to re-run because the stamp file is up-to-date.
-    return true;
-  }
-  cmSystemTools::RemoveFile(stampTemp);
-  cmSystemTools::Error(
-    cmStrCat("Cannot restore timestamp \"", stampName, "\": ", err));
-  return false;
-}
-
-static bool cmakeCheckStampList(const std::string& stampList)
-{
-  // If the stamp list does not exist CMake must rerun to generate it.
-  if (!cmSystemTools::FileExists(stampList)) {
-    std::cout << "CMake is re-running because generate.stamp.list "
-              << "is missing.\n";
-    return false;
-  }
-  cmsys::ifstream fin(stampList.c_str());
-  if (!fin) {
-    std::cout << "CMake is re-running because generate.stamp.list "
-              << "could not be read.\n";
-    return false;
-  }
-
-  // Check each stamp.
-  std::string stampName;
-  while (cmSystemTools::GetLineFromStream(fin, stampName)) {
-    if (!cmakeCheckStampFile(stampName)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 void cmake::IssueMessage(MessageType t, std::string const& text,
                          cmListFileBacktrace const& backtrace) const
 {
@@ -3185,8 +3413,8 @@ std::vector<std::string> cmake::GetDebugConfigs()
 
 int cmake::Build(int jobs, std::string dir, std::vector<std::string> targets,
                  std::string config, std::vector<std::string> nativeOptions,
-                 bool clean, bool verbose, const std::string& presetName,
-                 bool listPresets)
+                 cmBuildOptions& buildOptions, bool verbose,
+                 const std::string& presetName, bool listPresets)
 {
   this->SetHomeDirectory("");
   this->SetHomeOutputDirectory("");
@@ -3196,12 +3424,12 @@ int cmake::Build(int jobs, std::string dir, std::vector<std::string> targets,
     this->SetHomeDirectory(cmSystemTools::GetCurrentWorkingDirectory());
     this->SetHomeOutputDirectory(cmSystemTools::GetCurrentWorkingDirectory());
 
-    cmCMakePresetsFile settingsFile;
+    cmCMakePresetsGraph settingsFile;
     auto result = settingsFile.ReadProjectPresets(this->GetHomeDirectory());
-    if (result != cmCMakePresetsFile::ReadFileResult::READ_OK) {
+    if (result != cmCMakePresetsGraph::ReadFileResult::READ_OK) {
       cmSystemTools::Error(
         cmStrCat("Could not read presets from ", this->GetHomeDirectory(),
-                 ": ", cmCMakePresetsFile::ResultToString(result)));
+                 ": ", cmCMakePresetsGraph::ResultToString(result)));
       return 1;
     }
 
@@ -3292,8 +3520,13 @@ int cmake::Build(int jobs, std::string dir, std::vector<std::string> targets,
       config = expandedPreset->Configuration;
     }
 
-    if (!clean && expandedPreset->CleanFirst) {
-      clean = *expandedPreset->CleanFirst;
+    if (!buildOptions.Clean && expandedPreset->CleanFirst) {
+      buildOptions.Clean = *expandedPreset->CleanFirst;
+    }
+
+    if (buildOptions.ResolveMode == PackageResolveMode::Default &&
+        expandedPreset->ResolvePackageReferences) {
+      buildOptions.ResolveMode = *expandedPreset->ResolvePackageReferences;
     }
 
     if (!verbose && expandedPreset->Verbose) {
@@ -3432,7 +3665,7 @@ int cmake::Build(int jobs, std::string dir, std::vector<std::string> targets,
 
   this->GlobalGenerator->PrintBuildCommandAdvice(std::cerr, jobs);
   return this->GlobalGenerator->Build(
-    jobs, "", dir, projName, targets, output, "", config, clean, false,
+    jobs, "", dir, projName, targets, output, "", config, buildOptions,
     verbose, cmDuration::zero(), cmSystemTools::OUTPUT_PASSTHROUGH,
     nativeOptions);
 }
@@ -3478,6 +3711,214 @@ bool cmake::Open(const std::string& dir, bool dryRun)
   }
 
   return gen->Open(dir, *cachedProjectName, dryRun);
+}
+
+#if !defined(CMAKE_BOOTSTRAP)
+template <typename T>
+const T* cmake::FindPresetForWorkflow(
+  cm::static_string_view type,
+  const std::map<std::string, cmCMakePresetsGraph::PresetPair<T>>& presets,
+  const cmCMakePresetsGraph::WorkflowPreset::WorkflowStep& step)
+{
+  auto it = presets.find(step.PresetName);
+  if (it == presets.end()) {
+    cmSystemTools::Error(cmStrCat("No such ", type, " preset in ",
+                                  this->GetHomeDirectory(), ": \"",
+                                  step.PresetName, '"'));
+    return nullptr;
+  }
+
+  if (it->second.Unexpanded.Hidden) {
+    cmSystemTools::Error(cmStrCat("Cannot use hidden ", type, " preset in ",
+                                  this->GetHomeDirectory(), ": \"",
+                                  step.PresetName, '"'));
+    return nullptr;
+  }
+
+  if (!it->second.Expanded) {
+    cmSystemTools::Error(cmStrCat("Could not evaluate ", type, " preset \"",
+                                  step.PresetName,
+                                  "\": Invalid macro expansion"));
+    return nullptr;
+  }
+
+  if (!it->second.Expanded->ConditionResult) {
+    cmSystemTools::Error(cmStrCat("Cannot use disabled ", type, " preset in ",
+                                  this->GetHomeDirectory(), ": \"",
+                                  step.PresetName, '"'));
+    return nullptr;
+  }
+
+  return &*it->second.Expanded;
+}
+
+std::function<int()> cmake::BuildWorkflowStep(
+  const std::vector<std::string>& args)
+{
+  cmUVProcessChainBuilder builder;
+  builder
+    .AddCommand(args)
+#  ifdef _WIN32
+    .SetExternalStream(cmUVProcessChainBuilder::Stream_OUTPUT, _fileno(stdout))
+    .SetExternalStream(cmUVProcessChainBuilder::Stream_ERROR, _fileno(stderr));
+#  else
+    .SetExternalStream(cmUVProcessChainBuilder::Stream_OUTPUT, STDOUT_FILENO)
+    .SetExternalStream(cmUVProcessChainBuilder::Stream_ERROR, STDERR_FILENO);
+#  endif
+  return [builder]() -> int {
+    auto chain = builder.Start();
+    chain.Wait();
+    return static_cast<int>(chain.GetStatus().front()->ExitStatus);
+  };
+}
+#endif
+
+int cmake::Workflow(const std::string& presetName,
+                    WorkflowListPresets listPresets, WorkflowFresh fresh)
+{
+#ifndef CMAKE_BOOTSTRAP
+  this->SetHomeDirectory(cmSystemTools::GetCurrentWorkingDirectory());
+  this->SetHomeOutputDirectory(cmSystemTools::GetCurrentWorkingDirectory());
+
+  cmCMakePresetsGraph settingsFile;
+  auto result = settingsFile.ReadProjectPresets(this->GetHomeDirectory());
+  if (result != cmCMakePresetsGraph::ReadFileResult::READ_OK) {
+    cmSystemTools::Error(
+      cmStrCat("Could not read presets from ", this->GetHomeDirectory(), ": ",
+               cmCMakePresetsGraph::ResultToString(result)));
+    return 1;
+  }
+
+  if (listPresets == WorkflowListPresets::Yes) {
+    settingsFile.PrintWorkflowPresetList();
+    return 0;
+  }
+
+  auto presetPair = settingsFile.WorkflowPresets.find(presetName);
+  if (presetPair == settingsFile.WorkflowPresets.end()) {
+    cmSystemTools::Error(cmStrCat("No such workflow preset in ",
+                                  this->GetHomeDirectory(), ": \"", presetName,
+                                  '"'));
+    settingsFile.PrintWorkflowPresetList();
+    return 1;
+  }
+
+  if (presetPair->second.Unexpanded.Hidden) {
+    cmSystemTools::Error(cmStrCat("Cannot use hidden workflow preset in ",
+                                  this->GetHomeDirectory(), ": \"", presetName,
+                                  '"'));
+    settingsFile.PrintWorkflowPresetList();
+    return 1;
+  }
+
+  auto const& expandedPreset = presetPair->second.Expanded;
+  if (!expandedPreset) {
+    cmSystemTools::Error(cmStrCat("Could not evaluate workflow preset \"",
+                                  presetName, "\": Invalid macro expansion"));
+    settingsFile.PrintWorkflowPresetList();
+    return 1;
+  }
+
+  if (!expandedPreset->ConditionResult) {
+    cmSystemTools::Error(cmStrCat("Cannot use disabled workflow preset in ",
+                                  this->GetHomeDirectory(), ": \"", presetName,
+                                  '"'));
+    settingsFile.PrintWorkflowPresetList();
+    return 1;
+  }
+
+  struct CalculatedStep
+  {
+    int StepNumber;
+    cm::static_string_view Type;
+    std::string Name;
+    std::function<int()> Action;
+
+    CalculatedStep(int stepNumber, cm::static_string_view type,
+                   std::string name, std::function<int()> action)
+      : StepNumber(stepNumber)
+      , Type(type)
+      , Name(std::move(name))
+      , Action(std::move(action))
+    {
+    }
+  };
+
+  std::vector<CalculatedStep> steps;
+  steps.reserve(expandedPreset->Steps.size());
+  int stepNumber = 1;
+  for (auto const& step : expandedPreset->Steps) {
+    switch (step.PresetType) {
+      case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::
+        Configure: {
+        auto const* configurePreset = this->FindPresetForWorkflow(
+          "configure"_s, settingsFile.ConfigurePresets, step);
+        if (!configurePreset) {
+          return 1;
+        }
+        std::vector<std::string> args{ cmSystemTools::GetCMakeCommand(),
+                                       "--preset", step.PresetName };
+        if (fresh == WorkflowFresh::Yes) {
+          args.emplace_back("--fresh");
+        }
+        steps.emplace_back(stepNumber, "configure"_s, step.PresetName,
+                           this->BuildWorkflowStep(args));
+      } break;
+      case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::Build: {
+        auto const* buildPreset = this->FindPresetForWorkflow(
+          "build"_s, settingsFile.BuildPresets, step);
+        if (!buildPreset) {
+          return 1;
+        }
+        steps.emplace_back(
+          stepNumber, "build"_s, step.PresetName,
+          this->BuildWorkflowStep({ cmSystemTools::GetCMakeCommand(),
+                                    "--build", "--preset", step.PresetName }));
+      } break;
+      case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::Test: {
+        auto const* testPreset = this->FindPresetForWorkflow(
+          "test"_s, settingsFile.TestPresets, step);
+        if (!testPreset) {
+          return 1;
+        }
+        steps.emplace_back(
+          stepNumber, "test"_s, step.PresetName,
+          this->BuildWorkflowStep({ cmSystemTools::GetCTestCommand(),
+                                    "--preset", step.PresetName }));
+      } break;
+      case cmCMakePresetsGraph::WorkflowPreset::WorkflowStep::Type::Package: {
+        auto const* packagePreset = this->FindPresetForWorkflow(
+          "package"_s, settingsFile.PackagePresets, step);
+        if (!packagePreset) {
+          return 1;
+        }
+        steps.emplace_back(
+          stepNumber, "package"_s, step.PresetName,
+          this->BuildWorkflowStep({ cmSystemTools::GetCPackCommand(),
+                                    "--preset", step.PresetName }));
+      } break;
+    }
+    stepNumber++;
+  }
+
+  int stepResult;
+  bool first = true;
+  for (auto const& step : steps) {
+    if (!first) {
+      std::cout << "\n";
+    }
+    std::cout << "Executing workflow step " << step.StepNumber << " of "
+              << steps.size() << ": " << step.Type << " preset \"" << step.Name
+              << "\"\n\n"
+              << std::flush;
+    if ((stepResult = step.Action()) != 0) {
+      return stepResult;
+    }
+    first = false;
+  }
+#endif
+
+  return 0;
 }
 
 void cmake::WatchUnusedCli(const std::string& var)
@@ -3610,6 +4051,26 @@ void cmake::SetDeprecatedWarningsAsErrors(bool b)
                       "Whether to issue deprecation errors for macros"
                       " and functions.",
                       cmStateEnums::INTERNAL);
+}
+
+void cmake::SetDebugFindOutputPkgs(std::string const& args)
+{
+  this->DebugFindPkgs.emplace(args);
+}
+
+void cmake::SetDebugFindOutputVars(std::string const& args)
+{
+  this->DebugFindVars.emplace(args);
+}
+
+bool cmake::GetDebugFindOutput(std::string const& var) const
+{
+  return this->DebugFindVars.count(var);
+}
+
+bool cmake::GetDebugFindPkgOutput(std::string const& pkg) const
+{
+  return this->DebugFindPkgs.count(pkg);
 }
 
 #if !defined(CMAKE_BOOTSTRAP)

@@ -5,7 +5,7 @@
 #                            | (__| |_| |  _ <| |___
 #                             \___|\___/|_| \_\_____|
 #
-# Copyright (C) 1998 - 2021, Daniel Stenberg, <daniel@haxx.se>, et al.
+# Copyright (C) 1998 - 2022, Daniel Stenberg, <daniel@haxx.se>, et al.
 #
 # This software is licensed as described in the file COPYING, which
 # you should have received as part of this distribution. The terms
@@ -18,9 +18,12 @@
 # This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
 # KIND, either express or implied.
 #
+# SPDX-License-Identifier: curl
+#
 ###########################################################################
 set(LIB_NAME cmcurl)
 set(LIBCURL_OUTPUT_NAME cmcurl)
+add_definitions(-DBUILDING_LIBCURL)
 
 if(BUILD_SHARED_LIBS)
   set(CURL_STATICLIB NO)
@@ -82,7 +85,7 @@ endif()
 # For windows we want to install OPENSSL_LIBRARIES dlls
 # and also copy them into the build tree so that testing
 # can find them.
-if(CMAKE_USE_OPENSSL AND OPENSSL_FOUND AND WIN32)
+if(CURL_USE_OPENSSL AND OPENSSL_FOUND AND WIN32)
   find_file(CMAKE_EAY_DLL NAME libeay32.dll HINTS ${OPENSSL_INCLUDE_DIR}/..)
   find_file(CMAKE_SSL_DLL NAME ssleay32.dll HINTS ${OPENSSL_INCLUDE_DIR}/..)
   mark_as_advanced(CMAKE_EAY_DLL CMAKE_SSL_DLL)
@@ -121,9 +124,8 @@ endif()
 target_link_libraries(${LIB_NAME} PRIVATE ${CURL_LIBS})
 
 if(0) # This code not needed for building within CMake.
-if(WIN32)
-  add_definitions(-D_USRDLL)
-endif()
+transform_makefile_inc("Makefile.soname" "${CMAKE_CURRENT_BINARY_DIR}/Makefile.soname.cmake")
+include(${CMAKE_CURRENT_BINARY_DIR}/Makefile.soname.cmake)
 endif()
 
 set_target_properties(${LIB_NAME} PROPERTIES
@@ -132,6 +134,29 @@ set_target_properties(${LIB_NAME} PROPERTIES
   )
 
 if(0) # This code not needed for building within CMake.
+if(CMAKE_SYSTEM_NAME STREQUAL "AIX" OR
+  CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+  CMAKE_SYSTEM_NAME STREQUAL "GNU/kFreeBSD" OR
+
+  # FreeBSD comes with the a.out and elf flavours
+  # but a.out was supported up to version 3.x and
+  # elf from 3.x. I cannot imagine someone runnig
+  # CMake on those ancient systems
+  CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR
+
+  CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+
+  math(EXPR CMAKESONAME "${VERSIONCHANGE} - ${VERSIONDEL}")
+  set(CMAKEVERSION "${CMAKESONAME}.${VERSIONDEL}.${VERSIONADD}")
+
+  set_target_properties(${LIB_NAME} PROPERTIES
+    VERSION ${CMAKEVERSION}
+    SOVERSION ${CMAKESONAME}
+  )
+
+endif()
+
+
 if(HIDES_CURL_PRIVATE_SYMBOLS)
   set_property(TARGET ${LIB_NAME} APPEND PROPERTY COMPILE_DEFINITIONS "CURL_HIDDEN_SYMBOLS")
   set_property(TARGET ${LIB_NAME} APPEND PROPERTY COMPILE_FLAGS ${CURL_CFLAG_SYMBOLS_HIDE})
@@ -161,16 +186,18 @@ target_include_directories(${LIB_NAME} INTERFACE
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   $<BUILD_INTERFACE:${CURL_SOURCE_DIR}/include>)
 
-install(TARGETS ${LIB_NAME}
-  EXPORT ${TARGETS_EXPORT_NAME}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(CURL_ENABLE_EXPORT_TARGET)
+  install(TARGETS ${LIB_NAME}
+    EXPORT ${TARGETS_EXPORT_NAME}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
 
-export(TARGETS ${LIB_NAME}
-       APPEND FILE ${PROJECT_BINARY_DIR}/libcurl-target.cmake
-       NAMESPACE ${PROJECT_NAME}::
-)
+  export(TARGETS ${LIB_NAME}
+         FILE ${PROJECT_BINARY_DIR}/libcurl-target.cmake
+         NAMESPACE ${PROJECT_NAME}::
+  )
+endif()
 
 endif()

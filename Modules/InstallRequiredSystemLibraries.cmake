@@ -96,6 +96,7 @@ foreach(LANG IN ITEMS C CXX Fortran)
       else()
         set(_Intel_possible_redistdirs
           "${_Intel_basedir}/../lib/${_Intel_archdir}"
+          "${_Intel_basedir}/../compiler/lib/${_Intel_archdir}_lin"
           "${_Intel_basedir}/../../compiler/lib/${_Intel_archdir}_lin"
           )
       endif()
@@ -244,7 +245,7 @@ if(MSVC)
   elseif(MSVC_TOOLSET_VERSION GREATER_EQUAL 144)
     message(WARNING "MSVC toolset v${MSVC_TOOLSET_VERSION} not yet supported.")
   elseif(MSVC_TOOLSET_VERSION EQUAL 143)
-    set(MSVC_REDIST_NAME VC142)
+    set(MSVC_REDIST_NAME VC143)
     set(_MSVC_DLL_VERSION 140)
     set(_MSVC_IDE_VERSION 17)
   elseif(MSVC_TOOLSET_VERSION EQUAL 142)

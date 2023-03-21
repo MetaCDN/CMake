@@ -175,8 +175,9 @@ void cmMakefileLibraryTargetGenerator::WriteSharedLibraryRules(bool relink)
       this->LocalGenerator,
       this->LocalGenerator->GetStateSnapshot().GetDirectory());
 
-  this->AddModuleDefinitionFlag(linkLineComputer.get(), extraFlags,
-                                this->GetConfigName());
+  this->LocalGenerator->AppendModuleDefinitionFlag(
+    extraFlags, this->GeneratorTarget, linkLineComputer.get(),
+    this->GetConfigName());
 
   this->UseLWYU = this->LocalGenerator->AppendLWYUFlags(
     extraFlags, this->GeneratorTarget, linkLanguage);
@@ -209,8 +210,9 @@ void cmMakefileLibraryTargetGenerator::WriteModuleLibraryRules(bool relink)
       this->LocalGenerator,
       this->LocalGenerator->GetStateSnapshot().GetDirectory());
 
-  this->AddModuleDefinitionFlag(linkLineComputer.get(), extraFlags,
-                                this->GetConfigName());
+  this->LocalGenerator->AppendModuleDefinitionFlag(
+    extraFlags, this->GeneratorTarget, linkLineComputer.get(),
+    this->GetConfigName());
 
   this->WriteLibraryRules(linkRuleVar, extraFlags, relink);
 }
@@ -285,10 +287,6 @@ void cmMakefileLibraryTargetGenerator::WriteNvidiaDeviceLibraryRules(
   this->LocalGenerator->AddLanguageFlagsForLinking(
     langFlags, this->GeneratorTarget, linkLanguage, this->GetConfigName());
 
-  // Create set of linking flags.
-  std::string linkFlags;
-  this->GetDeviceLinkFlags(linkFlags, linkLanguage);
-
   // Clean files associated with this library.
   std::set<std::string> libCleanFiles;
   libCleanFiles.insert(
@@ -308,35 +306,36 @@ void cmMakefileLibraryTargetGenerator::WriteNvidiaDeviceLibraryRules(
   // Expand the rule variables.
   std::vector<std::string> real_link_commands;
   {
-    bool useWatcomQuote =
-      this->Makefile->IsOn(linkRuleVar + "_USE_WATCOM_QUOTE");
-
     // Set path conversion for link script shells.
     this->LocalGenerator->SetLinkScriptShell(useLinkScript);
 
     // Collect up flags to link in needed libraries.
     std::string linkLibs;
-    std::unique_ptr<cmLinkLineComputer> linkLineComputer(
+    std::unique_ptr<cmLinkLineDeviceComputer> linkLineComputer(
       new cmLinkLineDeviceComputer(
         this->LocalGenerator,
         this->LocalGenerator->GetStateSnapshot().GetDirectory()));
     linkLineComputer->SetForResponse(useResponseFileForLibs);
-    linkLineComputer->SetUseWatcomQuote(useWatcomQuote);
     linkLineComputer->SetRelink(relink);
 
-    this->CreateLinkLibs(linkLineComputer.get(), linkLibs,
-                         useResponseFileForLibs, depends);
+    // Create set of linking flags.
+    std::string linkFlags;
+    std::string ignored_;
+    this->LocalGenerator->GetDeviceLinkFlags(
+      *linkLineComputer, this->GetConfigName(), ignored_, linkFlags, ignored_,
+      ignored_, this->GeneratorTarget);
+
+    this->CreateLinkLibs(
+      linkLineComputer.get(), linkLibs, useResponseFileForLibs, depends,
+      cmMakefileTargetGenerator::ResponseFlagFor::DeviceLink);
 
     // Construct object file lists that may be needed to expand the
     // rule.
     std::string buildObjs;
-    this->CreateObjectLists(useLinkScript, false, // useArchiveRules
-                            useResponseFileForObjects, buildObjs, depends,
-                            useWatcomQuote);
-
-    cmOutputConverter::OutputFormat output = (useWatcomQuote)
-      ? cmOutputConverter::WATCOMQUOTE
-      : cmOutputConverter::SHELL;
+    this->CreateObjectLists(
+      useLinkScript, false, // useArchiveRules
+      useResponseFileForObjects, buildObjs, depends, false,
+      cmMakefileTargetGenerator::ResponseFlagFor::DeviceLink);
 
     std::string objectDir = this->GeneratorTarget->GetSupportDirectory();
     objectDir = this->LocalGenerator->ConvertToOutputFormat(
@@ -344,7 +343,8 @@ void cmMakefileLibraryTargetGenerator::WriteNvidiaDeviceLibraryRules(
       cmOutputConverter::SHELL);
 
     std::string target = this->LocalGenerator->ConvertToOutputFormat(
-      this->LocalGenerator->MaybeRelativeToCurBinDir(targetOutput), output);
+      this->LocalGenerator->MaybeRelativeToCurBinDir(targetOutput),
+      cmOutputConverter::SHELL);
 
     std::string targetFullPathCompilePDB =
       this->ComputeTargetCompilePDB(this->GetConfigName());
@@ -756,12 +756,9 @@ void cmMakefileLibraryTargetGenerator::WriteLibraryRules(
       cmOutputConverter::SHELL);
 
     vars.ObjectDir = objectDir.c_str();
-    cmOutputConverter::OutputFormat output = (useWatcomQuote)
-      ? cmOutputConverter::WATCOMQUOTE
-      : cmOutputConverter::SHELL;
     std::string target = this->LocalGenerator->ConvertToOutputFormat(
       this->LocalGenerator->MaybeRelativeToCurBinDir(targetFullPathReal),
-      output);
+      cmOutputConverter::SHELL, useWatcomQuote);
     vars.Target = target.c_str();
     vars.LinkLibraries = linkLibs.c_str();
     vars.ObjectsQuoted = buildObjs.c_str();
@@ -824,7 +821,7 @@ void cmMakefileLibraryTargetGenerator::WriteLibraryRules(
     if (useArchiveRules) {
       // Construct the individual object list strings.
       std::vector<std::string> object_strings;
-      this->WriteObjectsStrings(object_strings, archiveCommandLimit);
+      this->WriteObjectsStrings(object_strings, false, archiveCommandLimit);
 
       // Add the cuda device object to the list of archive files. This will
       // only occur on archives which have CUDA_RESOLVE_DEVICE_SYMBOLS enabled
@@ -936,7 +933,9 @@ void cmMakefileLibraryTargetGenerator::WriteLibraryRules(
   }
 
   // Compute the list of outputs.
-  std::vector<std::string> outputs(1, targetFullPathReal);
+  std::vector<std::string> outputs;
+  outputs.reserve(3);
+  outputs.push_back(targetFullPathReal);
   if (this->TargetNames.SharedObject != this->TargetNames.Real) {
     outputs.push_back(targetFullPathSO);
   }

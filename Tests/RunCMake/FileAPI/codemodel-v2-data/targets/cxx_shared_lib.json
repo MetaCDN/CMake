@@ -5,10 +5,12 @@
     "projectName": "Cxx",
     "type": "SHARED_LIBRARY",
     "isGeneratorProvided": null,
+    "fileSets": null,
     "sources": [
         {
             "path": "^empty\\.cxx$",
             "isGenerated": null,
+            "fileSetName": null,
             "sourceGroupName": "Source Files",
             "compileGroupLanguage": "CXX",
             "backtrace": [
@@ -91,7 +93,7 @@
                 "backtrace": [
                     {
                         "file": "^codemodel-v2\\.cmake$",
-                        "line": 41,
+                        "line": 45,
                         "command": "install",
                         "hasParent": true
                     },
@@ -121,7 +123,7 @@
                 "backtrace": [
                     {
                         "file": "^codemodel-v2\\.cmake$",
-                        "line": 41,
+                        "line": 45,
                         "command": "install",
                         "hasParent": true
                     },
@@ -151,7 +153,7 @@
                 "backtrace": [
                     {
                         "file": "^codemodel-v2\\.cmake$",
-                        "line": 46,
+                        "line": 50,
                         "command": "install",
                         "hasParent": true
                     },

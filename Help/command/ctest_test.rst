@@ -3,7 +3,7 @@ ctest_test
 
 Perform the :ref:`CTest Test Step` as a :ref:`Dashboard Client`.
 
-::
+.. code-block:: cmake
 
   ctest_test([BUILD <build-dir>] [APPEND]
              [START <start-number>]
@@ -30,7 +30,7 @@ Perform the :ref:`CTest Test Step` as a :ref:`Dashboard Client`.
              )
 
 ..
-   _note: If updating the argument list here, please also update the argument
+   NOTE If updating the argument list here, please also update the argument
    list documentation for :command:`ctest_memcheck` as well.
 
 Run tests in the project build tree and store results in
@@ -109,8 +109,9 @@ The options are:
   While running tests in parallel, try not to start tests when they
   may cause the CPU load to pass above a given threshold.  If not
   specified the :variable:`CTEST_TEST_LOAD` variable will be checked,
-  and then the ``--test-load`` command-line argument to :manual:`ctest(1)`.
-  See also the ``TestLoad`` setting in the :ref:`CTest Test Step`.
+  and then the :option:`--test-load <ctest --test-load>` command-line
+  argument to :manual:`ctest(1)`. See also the ``TestLoad`` setting
+  in the :ref:`CTest Test Step`.
 
 ``REPEAT <mode>:<n>``
   .. versionadded:: 3.17
@@ -172,8 +173,13 @@ The options are:
   affected.  Summary info detailing the percentage of passing tests is also
   unaffected by the ``QUIET`` option.
 
-See also the :variable:`CTEST_CUSTOM_MAXIMUM_PASSED_TEST_OUTPUT_SIZE`
-and :variable:`CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE` variables.
+See also the :variable:`CTEST_CUSTOM_MAXIMUM_PASSED_TEST_OUTPUT_SIZE`,
+:variable:`CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE` and
+:variable:`CTEST_CUSTOM_TEST_OUTPUT_TRUNCATION` variables, along with their
+corresponding :manual:`ctest(1)` command line options
+:option:`--test-output-size-passed <ctest --test-output-size-passed>`,
+:option:`--test-output-size-failed <ctest --test-output-size-failed>`, and
+:option:`--test-output-truncation <ctest --test-output-truncation>`.
 
 .. _`Additional Test Measurements`:
 
@@ -190,9 +196,10 @@ Check the `CDash test measurement documentation
 <https://github.com/Kitware/CDash/blob/master/docs/test_measurements.md>`_
 for more information on the types of test measurements that CDash recognizes.
 
-Starting in version 3.22, CTest can parse custom measurements from tags named
-``<CTestMeasurement>`` or ``<CTestMeasurementFile>``. The older names
-``<DartMeasurement>`` and ``<DartMeasurementFile>`` are still supported.
+.. versionadded: 3.22
+  CTest can parse custom measurements from tags named
+  ``<CTestMeasurement>`` or ``<CTestMeasurementFile>``. The older names
+  ``<DartMeasurement>`` and ``<DartMeasurementFile>`` are still supported.
 
 The following example demonstrates how to output a variety of custom test
 measurements.
@@ -234,7 +241,7 @@ The following example demonstrates how to upload test images to CDash.
      "/dir/to/valid_img.gif</CTestMeasurementFile>" << std::endl;
 
    std::cout <<
-     "<CTestMeasurementFile type=\"image/png\" name=\"AlgoResult\"> <<
+     "<CTestMeasurementFile type=\"image/png\" name=\"AlgoResult\">" <<
      "/dir/to/img.png</CTestMeasurementFile>"
      << std::endl;
 
@@ -256,6 +263,8 @@ separate from the interactive comparison UI.
 Attached Files
 """"""""""""""
 
+.. versionadded:: 3.21
+
 The following example demonstrates how to upload non-image files to CDash.
 
 .. code-block:: c++
@@ -273,6 +282,8 @@ properties instead.
 Custom Details
 """"""""""""""
 
+.. versionadded:: 3.21
+
 The following example demonstrates how to specify a custom value for the
 ``Test Details`` field displayed on CDash.
 
@@ -281,8 +292,12 @@ The following example demonstrates how to specify a custom value for the
    std::cout <<
      "<CTestDetails>My Custom Details Value</CTestDetails>" << std::endl;
 
+.. _`Additional Labels`:
+
 Additional Labels
 """""""""""""""""
+
+.. versionadded:: 3.22
 
 The following example demonstrates how to add additional labels to a test
 at runtime.

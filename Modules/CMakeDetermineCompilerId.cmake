@@ -2,6 +2,8 @@
 # file Copyright.txt or https://cmake.org/licensing for details.
 
 macro(__determine_compiler_id_test testflags_var userflags_var)
+  set(_CMAKE_${lang}_COMPILER_ID_LOG "")
+
   separate_arguments(testflags UNIX_COMMAND "${${testflags_var}}")
   CMAKE_DETERMINE_COMPILER_ID_BUILD("${lang}" "${testflags}" "${${userflags_var}}" "${src}")
   CMAKE_DETERMINE_COMPILER_ID_MATCH_VENDOR("${lang}" "${COMPILER_${lang}_PRODUCED_OUTPUT}")
@@ -11,6 +13,9 @@ macro(__determine_compiler_id_test testflags_var userflags_var)
       CMAKE_DETERMINE_COMPILER_ID_CHECK("${lang}" "${CMAKE_${lang}_COMPILER_ID_DIR}/${file}" "${src}")
     endforeach()
   endif()
+
+  message(CONFIGURE_LOG "${_CMAKE_${lang}_COMPILER_ID_LOG}")
+  unset(_CMAKE_${lang}_COMPILER_ID_LOG)
 endmacro()
 
 # Function to compile a source file to identify the compiler.  This is
@@ -85,8 +90,6 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
   # If the compiler is still unknown, fallback to GHS
   if(NOT CMAKE_${lang}_COMPILER_ID  AND "${CMAKE_GENERATOR}" MATCHES "Green Hills MULTI")
     set(CMAKE_${lang}_COMPILER_ID GHS)
-    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-        "The ${lang} compiler identification is falling back to GHS.\n\n")
   endif()
 
   # CUDA < 7.5 is missing version macros
@@ -116,7 +119,7 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
       RESULT_VARIABLE result
       TIMEOUT 10
     )
-    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+    message(CONFIGURE_LOG
       "Running the ${lang} compiler: \"${CMAKE_${lang}_COMPILER}\" -version\n"
       "${output}\n"
       )
@@ -140,7 +143,7 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
       RESULT_VARIABLE result
       TIMEOUT 10
     )
-    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+    message(CONFIGURE_LOG
       "Running the ${lang} compiler: \"${CMAKE_${lang}_COMPILER}\" -version\n"
       "${output}\n"
       )
@@ -150,7 +153,28 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     endif()
   endif()
 
-  if (COMPILER_QNXNTO AND CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
+  # For LCC Fortran we need to explicitly query the version.
+  if(lang STREQUAL "Fortran"
+     AND CMAKE_${lang}_COMPILER_ID STREQUAL "LCC")
+    execute_process(
+      COMMAND "${CMAKE_${lang}_COMPILER}"
+      --version
+      OUTPUT_VARIABLE output ERROR_VARIABLE output
+      RESULT_VARIABLE result
+      TIMEOUT 10
+    )
+    message(CONFIGURE_LOG
+      "Running the ${lang} compiler: \"${CMAKE_${lang}_COMPILER}\" --version\n"
+      "${output}\n"
+      )
+
+    if(output MATCHES [[\(GCC\) ([0-9]+\.[0-9]+(\.[0-9]+)?) compatible]])
+      set(CMAKE_${lang}_SIMULATE_ID "GNU")
+      set(CMAKE_${lang}_SIMULATE_VERSION "${CMAKE_MATCH_1}")
+    endif()
+  endif()
+
+  if (COMPILER_QNXNTO AND (CMAKE_${lang}_COMPILER_ID STREQUAL "GNU" OR CMAKE_${lang}_COMPILER_ID STREQUAL "LCC"))
     execute_process(
       COMMAND "${CMAKE_${lang}_COMPILER}"
       -V
@@ -195,6 +219,9 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
       AND MSVC_${lang}_ARCHITECTURE_ID)
     foreach(userflags "${CMAKE_${lang}_COMPILER_ID_FLAGS_LIST}" "")
       CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX(${lang} "${userflags}")
+      if(CMAKE_${lang}_CL_SHOWINCLUDES_PREFIX)
+        break()
+      endif()
     endforeach()
   else()
     set(CMAKE_${lang}_CL_SHOWINCLUDES_PREFIX "")
@@ -222,8 +249,12 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     else()
       set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "GNU")
     endif()
-  elseif("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xFujitsuClang")
+  elseif("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xGNU"
+    OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xAppleClang"
+    OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xFujitsuClang")
     set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "GNU")
+  elseif("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xMSVC")
+    set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "MSVC")
   else()
     set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "")
   endif()
@@ -320,15 +351,13 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
       set(id_cl "$(CLToolExe)")
     elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "v[0-9]+_clang_.*")
       set(id_cl clang.exe)
-    # Executable names have been chosen according documentation
-    # URL: (https://software.intel.com/content/www/us/en/develop/documentation/get-started-with-dpcpp-compiler/top.html#top_GUID-A9B4C91D-97AC-450D-9742-9D895BC8AEE1)
     elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "Intel")
       if(CMAKE_VS_PLATFORM_TOOLSET MATCHES "DPC\\+\\+ Compiler")
         set(id_cl dpcpp.exe)
-      elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "C\\+\\+ Compiler 2021")
-        set(id_cl icx.exe)
-      elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "C\\+\\+ Compiler")
+      elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "C\\+\\+ Compiler ([8-9]\\.|1[0-9]\\.|XE)")
         set(id_cl icl.exe)
+      elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "C\\+\\+ Compiler")
+        set(id_cl icx.exe)
       endif()
     else()
       set(id_cl cl.exe)
@@ -421,6 +450,15 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
     if(CMAKE_VS_PLATFORM_TOOLSET_VCTARGETS_CUSTOM_DIR)
       set(id_ToolsetVCTargetsDir "<VCTargetsPath>${CMAKE_VS_PLATFORM_TOOLSET_VCTARGETS_CUSTOM_DIR}</VCTargetsPath>")
     endif()
+    if(CMAKE_VS_TARGET_FRAMEWORK_VERSION)
+      set(id_TargetFrameworkVersion "<TargetFrameworkVersion>${CMAKE_VS_TARGET_FRAMEWORK_VERSION}</TargetFrameworkVersion>")
+    endif()
+    if(CMAKE_VS_TARGET_FRAMEWORK_IDENTIFIER)
+      set(id_TargetFrameworkIdentifier "<TargetFrameworkIdentifier>${CMAKE_VS_TARGET_FRAMEWORK_IDENTIFIER}</TargetFrameworkIdentifier>")
+    endif()
+    if(CMAKE_VS_TARGET_FRAMEWORK_TARGETS_VERSION)
+      set(id_TargetFrameworkTargetsVersion "<TargetFrameworkTargetsVersion>${CMAKE_VS_TARGET_FRAMEWORK_TARGETS_VERSION}</TargetFrameworkTargetsVersion>")
+    endif()
     set(id_CustomGlobals "")
     foreach(pair IN LISTS CMAKE_VS_GLOBALS)
       if("${pair}" MATCHES "([^=]+)=(.*)$")
@@ -467,11 +505,7 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
       if(CMAKE_VS_PLATFORM_NAME STREQUAL x64)
         set(cuda_target "<TargetMachinePlatform>64</TargetMachinePlatform>")
       endif()
-      foreach(arch ${CMAKE_CUDA_ARCHITECTURES})
-        string(REGEX MATCH "[0-9]+" arch_name "${arch}")
-        string(APPEND cuda_codegen "compute_${arch_name},sm_${arch_name};")
-      endforeach()
-      set(id_ItemDefinitionGroup_entry "<CudaCompile>${cuda_target}<AdditionalOptions>%(AdditionalOptions)-v</AdditionalOptions><CodeGeneration>${cuda_codegen}</CodeGeneration></CudaCompile>")
+      set(id_ItemDefinitionGroup_entry "<CudaCompile>${cuda_target}<AdditionalOptions>%(AdditionalOptions)-v</AdditionalOptions></CudaCompile>")
       set(id_PostBuildEvent_Command [[echo CMAKE_CUDA_COMPILER=$(CudaToolkitBinDir)\nvcc.exe]])
       if(CMAKE_VS_PLATFORM_TOOLSET_CUDA_CUSTOM_DIR)
         # check for legacy cuda custom toolkit folder structure
@@ -587,6 +621,7 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
       endif()
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_OSX_SYSROOT MATCHES "^$|[Mm][Aa][Cc][Oo][Ss]")
+      set(id_code_sign_identity "-")
       # When targeting macOS, use only the host architecture.
       if (_CMAKE_APPLE_ARCHS_DEFAULT)
         set(id_archs "ARCHS = \"${_CMAKE_APPLE_ARCHS_DEFAULT}\";")
@@ -596,6 +631,7 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
         set(id_arch_active "ONLY_ACTIVE_ARCH = YES;")
       endif()
     else()
+      set(id_code_sign_identity "")
       set(id_archs "")
       set(id_arch_active "ONLY_ACTIVE_ARCH = YES;")
     endif()
@@ -632,12 +668,8 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
   elseif("${CMAKE_GENERATOR}" MATCHES "Green Hills MULTI")
     set(id_dir ${CMAKE_${lang}_COMPILER_ID_DIR})
     set(id_src "${src}")
-    if (GHS_PRIMARY_TARGET)
-      set(ghs_primary_target "${GHS_PRIMARY_TARGET}")
-    else()
-      set(ghs_primary_target "${CMAKE_GENERATOR_PLATFORM}_${GHS_TARGET_PLATFORM}.tgt")
-    endif()
-    if ("${GHS_TARGET_PLATFORM}" MATCHES "integrity")
+    set(ghs_primary_target "${GHS_PRIMARY_TARGET}")
+    if ("${ghs_primary_target}" MATCHES "integrity")
         set(bsp_name "macro GHS_BSP=${GHS_BSP_NAME}")
         set(os_dir "macro GHS_OS=${GHS_OS_DIR}")
     endif()
@@ -708,13 +740,19 @@ ${CMAKE_${lang}_COMPILER_ID_OUTPUT}
 ")
     # Log the output unless we recognize it as a known-bad case.
     if(NOT CMAKE_${lang}_COMPILER_ID_OUTPUT MATCHES "warning #5117: Bad # preprocessor line")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log "${MSG}")
+      string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG "${MSG}")
     endif()
+
+    string(APPEND _CMAKE_DETERMINE_COMPILER_ID_BUILD_MSG "${MSG}")
 
     # Some languages may know the correct/desired set of flags and want to fail right away if they don't work.
     # This is currently only used by CUDA.
     if(__compiler_id_require_success)
-      message(FATAL_ERROR "${MSG}")
+      message(FATAL_ERROR "${_CMAKE_DETERMINE_COMPILER_ID_BUILD_MSG}")
+    elseif(CMAKE_${lang}_COMPILER_ID_REQUIRE_SUCCESS)
+      # Build up the outputs for compiler detection attempts so that users
+      # can see all set of flags tried, instead of just last
+      set(_CMAKE_DETERMINE_COMPILER_ID_BUILD_MSG "${_CMAKE_DETERMINE_COMPILER_ID_BUILD_MSG}" PARENT_SCOPE)
     endif()
 
     # No output files should be inspected.
@@ -722,7 +760,7 @@ ${CMAKE_${lang}_COMPILER_ID_OUTPUT}
     set(COMPILER_${lang}_PRODUCED_OUTPUT)
   else()
     # Compilation succeeded.
-    file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+    string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG
       "Compiling the ${lang} compiler identification source file \"${src}\" succeeded.
 ${COMPILER_DESCRIPTION}
 The output was:
@@ -751,7 +789,7 @@ ${CMAKE_${lang}_COMPILER_ID_OUTPUT}
     foreach(file ${files})
       if(NOT IS_DIRECTORY ${CMAKE_${lang}_COMPILER_ID_DIR}/${file})
         list(APPEND COMPILER_${lang}_PRODUCED_FILES ${file})
-        file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+        string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG
           "Compilation of the ${lang} compiler identification source \""
           "${src}\" produced \"${file}\"\n\n")
       endif()
@@ -759,7 +797,7 @@ ${CMAKE_${lang}_COMPILER_ID_OUTPUT}
 
     if(NOT COMPILER_${lang}_PRODUCED_FILES)
       # No executable was found.
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
+      string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG
         "Compilation of the ${lang} compiler identification source \""
         "${src}\" did not produce an executable in \""
         "${CMAKE_${lang}_COMPILER_ID_DIR}\".\n\n")
@@ -771,6 +809,7 @@ ${CMAKE_${lang}_COMPILER_ID_OUTPUT}
   # Return the files produced by the compilation.
   set(COMPILER_${lang}_PRODUCED_FILES "${COMPILER_${lang}_PRODUCED_FILES}" PARENT_SCOPE)
   set(COMPILER_${lang}_PRODUCED_OUTPUT "${COMPILER_${lang}_PRODUCED_OUTPUT}" PARENT_SCOPE)
+  set(_CMAKE_${lang}_COMPILER_ID_LOG "${_CMAKE_${lang}_COMPILER_ID_LOG}" PARENT_SCOPE)
 
 endfunction()
 
@@ -815,14 +854,23 @@ function(CMAKE_DETERMINE_COMPILER_ID_CHECK lang file)
     set(ARCHITECTURE_ID)
     set(SIMULATE_ID)
     set(SIMULATE_VERSION)
+    set(CMAKE_${lang}_COMPILER_ID_STRING_REGEX ".?I.?N.?F.?O.?:.?[A-Za-z0-9_]+\\[[^]]*\\]")
     foreach(encoding "" "ENCODING;UTF-16LE" "ENCODING;UTF-16BE")
       file(STRINGS "${file}" CMAKE_${lang}_COMPILER_ID_STRINGS
         LIMIT_COUNT 38 ${encoding}
-        REGEX ".?I.?N.?F.?O.?:.?[A-Za-z0-9_]+\\[[^]]*\\]")
+        REGEX "${CMAKE_${lang}_COMPILER_ID_STRING_REGEX}")
       if(NOT CMAKE_${lang}_COMPILER_ID_STRINGS STREQUAL "")
         break()
       endif()
     endforeach()
+
+    # Some ADSP processors result in characters being detected as separate strings
+    if(CMAKE_${lang}_COMPILER_ID_STRINGS STREQUAL "")
+      file(STRINGS "${file}" CMAKE_${lang}_COMPILER_ID_STRINGS LENGTH_MAXIMUM 1)
+      string(REGEX REPLACE ";" "" CMAKE_${lang}_COMPILER_ID_STRING "${CMAKE_${lang}_COMPILER_ID_STRINGS}")
+      string(REGEX MATCHALL "${CMAKE_${lang}_COMPILER_ID_STRING_REGEX}"
+        CMAKE_${lang}_COMPILER_ID_STRINGS "${CMAKE_${lang}_COMPILER_ID_STRING}")
+    endif()
 
     # With the IAR Compiler, some strings are found twice, first time as incomplete
     # list like "?<Constant "INFO:compiler[IAR]">".  Remove the incomplete copies.
@@ -955,15 +1003,16 @@ function(CMAKE_DETERMINE_COMPILER_ID_CHECK lang file)
     # Check the compiler identification string.
     if(CMAKE_${lang}_COMPILER_ID)
       # The compiler identification was found.
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-        "The ${lang} compiler identification is ${CMAKE_${lang}_COMPILER_ID}, found in \""
-        "${file}\"\n\n")
+      string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG
+        "The ${lang} compiler identification is ${CMAKE_${lang}_COMPILER_ID}, found in:\n"
+        "  ${file}\n\n")
     else()
       # The compiler identification could not be found.
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
-        "The ${lang} compiler identification could not be found in \""
-        "${file}\"\n\n")
+      string(APPEND _CMAKE_${lang}_COMPILER_ID_LOG
+        "The ${lang} compiler identification could not be found in:\n"
+        "  ${file}\n\n")
     endif()
+    set(_CMAKE_${lang}_COMPILER_ID_LOG "${_CMAKE_${lang}_COMPILER_ID_LOG}" PARENT_SCOPE)
   endif()
 
   # try to figure out the executable format: ELF, COFF, Mach-O
@@ -1050,7 +1099,7 @@ function(CMAKE_DETERMINE_COMPILER_ID_VENDOR lang userflags)
       )
 
     if("${output}" MATCHES "${regex}")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+      message(CONFIGURE_LOG
         "Checking whether the ${lang} compiler is ${vendor} using \"${flags}\" "
         "matched \"${regex}\":\n${output}")
       set(CMAKE_${lang}_COMPILER_ID "${vendor}" PARENT_SCOPE)
@@ -1059,11 +1108,11 @@ function(CMAKE_DETERMINE_COMPILER_ID_VENDOR lang userflags)
       break()
     else()
       if("${result}" MATCHES  "timeout")
-        file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
+        message(CONFIGURE_LOG
           "Checking whether the ${lang} compiler is ${vendor} using \"${flags}\" "
           "terminated after 10 s due to timeout.")
       else()
-        file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
+        message(CONFIGURE_LOG
           "Checking whether the ${lang} compiler is ${vendor} using \"${flags}\" "
           "did not match \"${regex}\":\n${output}")
        endif()
@@ -1092,11 +1141,14 @@ function(CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX lang userflags)
     OUTPUT_VARIABLE out
     ERROR_VARIABLE err
     RESULT_VARIABLE res
-    ENCODING AUTO # cl prints in current code page
+    ENCODING AUTO # cl prints in console output code page
     )
-  if(res EQUAL 0 AND "${out}" MATCHES "(^|\n)([^:\n]*:[^:\n]*:[ \t]*)")
+  string(REPLACE "\n" "\n  " msg "  ${out}")
+  if(res EQUAL 0 AND "${out}" MATCHES "(^|\n)([^:\n][^:\n]+:[^:\n]*[^: \n][^: \n]:?[ \t]+)[A-Za-z]:\\\\")
     set(CMAKE_${lang}_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
+    string(APPEND msg "\nFound prefix \"${CMAKE_MATCH_2}\"")
   else()
     set(CMAKE_${lang}_CL_SHOWINCLUDES_PREFIX "" PARENT_SCOPE)
   endif()
+  message(CONFIGURE_LOG "Detecting ${lang} compiler /showIncludes prefix:\n${msg}\n")
 endfunction()

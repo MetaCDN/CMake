@@ -32,12 +32,13 @@ cmFindLibraryCommand::cmFindLibraryCommand(cmExecutionStatus& status)
 // cmFindLibraryCommand
 bool cmFindLibraryCommand::InitialPass(std::vector<std::string> const& argsIn)
 {
-  this->DebugMode = this->ComputeIfDebugModeWanted();
   this->CMakePathName = "LIBRARY";
 
   if (!this->ParseArguments(argsIn)) {
     return false;
   }
+
+  this->DebugMode = this->ComputeIfDebugModeWanted(this->VariableName);
 
   if (this->AlreadyDefined) {
     this->NormalizeFindResult();
@@ -191,6 +192,7 @@ struct cmFindLibraryHelper
 
   // Context information.
   cmMakefile* Makefile;
+  cmFindBase const* FindBase;
   cmGlobalGenerator* GG;
 
   // List of valid prefixes and suffixes.
@@ -237,6 +239,11 @@ struct cmFindLibraryHelper
   void SetName(std::string const& name);
   bool CheckDirectory(std::string const& path);
   bool CheckDirectoryForName(std::string const& path, Name& name);
+
+  bool Validate(const std::string& path) const
+  {
+    return this->FindBase->Validate(path);
+  }
 
   cmFindBaseDebugState DebugSearches;
 
@@ -290,6 +297,7 @@ std::string const& get_suffixes(cmMakefile* mf)
 cmFindLibraryHelper::cmFindLibraryHelper(std::string debugName, cmMakefile* mf,
                                          cmFindBase const* base)
   : Makefile(mf)
+  , FindBase(base)
   , DebugMode(base->DebugModeEnabled())
   , DebugSearches(std::move(debugName), base)
 {
@@ -415,10 +423,13 @@ bool cmFindLibraryHelper::CheckDirectoryForName(std::string const& path,
     if (!exists) {
       this->DebugLibraryFailed(name.Raw, path);
     } else {
-      this->DebugLibraryFound(name.Raw, path);
-      this->BestPath = cmSystemTools::CollapseFullPath(this->TestPath);
-      cmSystemTools::ConvertToUnixSlashes(this->BestPath);
-      return true;
+      auto testPath = cmSystemTools::CollapseFullPath(this->TestPath);
+      if (this->Validate(testPath)) {
+        this->DebugLibraryFound(name.Raw, path);
+        this->BestPath = testPath;
+        return true;
+      }
+      this->DebugLibraryFailed(name.Raw, path);
     }
   }
 
@@ -442,8 +453,11 @@ bool cmFindLibraryHelper::CheckDirectoryForName(std::string const& path,
       this->TestPath = cmStrCat(path, origName);
       // Make sure the path is readable and is not a directory.
       if (cmSystemTools::FileExists(this->TestPath, true)) {
-        this->DebugLibraryFound(name.Raw, dir);
+        if (!this->Validate(cmSystemTools::CollapseFullPath(this->TestPath))) {
+          continue;
+        }
 
+        this->DebugLibraryFound(name.Raw, dir);
         // This is a matching file.  Check if it is better than the
         // best name found so far.  Earlier prefixes are preferred,
         // followed by earlier suffixes.  For OpenBSD, shared library
@@ -540,7 +554,10 @@ std::string cmFindLibraryCommand::FindFrameworkLibraryNamesPerDir()
     for (std::string const& n : this->Names) {
       fwPath = cmStrCat(d, n, ".framework");
       if (cmSystemTools::FileIsDirectory(fwPath)) {
-        return cmSystemTools::CollapseFullPath(fwPath);
+        auto finalPath = cmSystemTools::CollapseFullPath(fwPath);
+        if (this->Validate(finalPath)) {
+          return finalPath;
+        }
       }
     }
   }
@@ -557,7 +574,10 @@ std::string cmFindLibraryCommand::FindFrameworkLibraryDirsPerName()
     for (std::string const& d : this->SearchPaths) {
       fwPath = cmStrCat(d, n, ".framework");
       if (cmSystemTools::FileIsDirectory(fwPath)) {
-        return cmSystemTools::CollapseFullPath(fwPath);
+        auto finalPath = cmSystemTools::CollapseFullPath(fwPath);
+        if (this->Validate(finalPath)) {
+          return finalPath;
+        }
       }
     }
   }

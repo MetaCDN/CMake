@@ -8,12 +8,12 @@ Synopsis
 
 .. parsed-literal::
 
- ccmake [<options>] {<path-to-source> | <path-to-existing-build>}
+ ccmake [<options>] <path-to-source | path-to-existing-build>
 
 Description
 ===========
 
-The **ccmake** executable is the CMake curses interface.  Project
+The :program:`ccmake` executable is the CMake curses interface.  Project
 configuration settings may be specified interactively through this
 GUI.  Brief instructions are provided at the bottom of the terminal
 when the program is running.
@@ -26,6 +26,8 @@ native tool on their platform.
 
 Options
 =======
+
+.. program:: ccmake
 
 .. include:: OPTIONS_BUILD.txt
 

@@ -77,8 +77,6 @@ Properties on Directories
    /prop_dir/IMPORTED_TARGETS
    /prop_dir/INCLUDE_DIRECTORIES
    /prop_dir/INCLUDE_REGULAR_EXPRESSION
-   /prop_dir/INTERPROCEDURAL_OPTIMIZATION
-   /prop_dir/INTERPROCEDURAL_OPTIMIZATION_CONFIG
    /prop_dir/LABELS
    /prop_dir/LINK_DIRECTORIES
    /prop_dir/LINK_OPTIONS
@@ -90,6 +88,7 @@ Properties on Directories
    /prop_dir/RULE_LAUNCH_LINK
    /prop_dir/SOURCE_DIR
    /prop_dir/SUBDIRECTORIES
+   /prop_dir/SYSTEM
    /prop_dir/TESTS
    /prop_dir/TEST_INCLUDE_FILES
    /prop_dir/VARIABLES
@@ -171,6 +170,7 @@ Properties on Targets
    /prop_tgt/COMPILE_PDB_NAME_CONFIG
    /prop_tgt/COMPILE_PDB_OUTPUT_DIRECTORY
    /prop_tgt/COMPILE_PDB_OUTPUT_DIRECTORY_CONFIG
+   /prop_tgt/COMPILE_WARNING_AS_ERROR
    /prop_tgt/CONFIG_OUTPUT_NAME
    /prop_tgt/CONFIG_POSTFIX
    /prop_tgt/CROSSCOMPILING_EMULATOR
@@ -183,6 +183,17 @@ Properties on Targets
    /prop_tgt/CUDA_STANDARD
    /prop_tgt/CUDA_STANDARD_REQUIRED
    /prop_tgt/CXX_EXTENSIONS
+   /prop_tgt/CXX_MODULE_DIRS
+   /prop_tgt/CXX_MODULE_DIRS_NAME
+   /prop_tgt/CXX_MODULE_HEADER_UNIT_DIRS
+   /prop_tgt/CXX_MODULE_HEADER_UNIT_DIRS_NAME
+   /prop_tgt/CXX_MODULE_HEADER_UNIT_SET
+   /prop_tgt/CXX_MODULE_HEADER_UNIT_SET_NAME
+   /prop_tgt/CXX_MODULE_HEADER_UNIT_SETS
+   /prop_tgt/CXX_MODULE_SET
+   /prop_tgt/CXX_MODULE_SET_NAME
+   /prop_tgt/CXX_MODULE_SETS
+   /prop_tgt/CXX_SCAN_FOR_MODULES
    /prop_tgt/CXX_STANDARD
    /prop_tgt/CXX_STANDARD_REQUIRED
    /prop_tgt/DEBUG_POSTFIX
@@ -191,6 +202,7 @@ Properties on Targets
    /prop_tgt/DEPLOYMENT_REMOTE_DIRECTORY
    /prop_tgt/DEPRECATION
    /prop_tgt/DISABLE_PRECOMPILE_HEADERS
+   /prop_tgt/DOTNET_SDK
    /prop_tgt/DOTNET_TARGET_FRAMEWORK
    /prop_tgt/DOTNET_TARGET_FRAMEWORK_VERSION
    /prop_tgt/EchoString
@@ -200,6 +212,7 @@ Properties on Targets
    /prop_tgt/EXCLUDE_FROM_DEFAULT_BUILD_CONFIG
    /prop_tgt/EXPORT_COMPILE_COMMANDS
    /prop_tgt/EXPORT_NAME
+   /prop_tgt/EXPORT_NO_SYSTEM
    /prop_tgt/EXPORT_PROPERTIES
    /prop_tgt/FOLDER
    /prop_tgt/Fortran_BUILDING_INSTRINSIC_MODULES
@@ -214,6 +227,11 @@ Properties on Targets
    /prop_tgt/GHS_NO_SOURCE_GROUP_FILE
    /prop_tgt/GNUtoMS
    /prop_tgt/HAS_CXX
+   /prop_tgt/HEADER_DIRS
+   /prop_tgt/HEADER_DIRS_NAME
+   /prop_tgt/HEADER_SET
+   /prop_tgt/HEADER_SET_NAME
+   /prop_tgt/HEADER_SETS
    /prop_tgt/HIP_ARCHITECTURES
    /prop_tgt/HIP_EXTENSIONS
    /prop_tgt/HIP_STANDARD
@@ -239,6 +257,7 @@ Properties on Targets
    /prop_tgt/IMPORTED_LOCATION_CONFIG
    /prop_tgt/IMPORTED_NO_SONAME
    /prop_tgt/IMPORTED_NO_SONAME_CONFIG
+   /prop_tgt/IMPORTED_NO_SYSTEM
    /prop_tgt/IMPORTED_OBJECTS
    /prop_tgt/IMPORTED_OBJECTS_CONFIG
    /prop_tgt/IMPORTED_SONAME
@@ -254,10 +273,16 @@ Properties on Targets
    /prop_tgt/INTERFACE_COMPILE_DEFINITIONS
    /prop_tgt/INTERFACE_COMPILE_FEATURES
    /prop_tgt/INTERFACE_COMPILE_OPTIONS
+   /prop_tgt/INTERFACE_CXX_MODULE_HEADER_UNIT_SETS
+   /prop_tgt/INTERFACE_CXX_MODULE_SETS
+   /prop_tgt/INTERFACE_HEADER_SETS
+   /prop_tgt/INTERFACE_HEADER_SETS_TO_VERIFY
    /prop_tgt/INTERFACE_INCLUDE_DIRECTORIES
    /prop_tgt/INTERFACE_LINK_DEPENDS
    /prop_tgt/INTERFACE_LINK_DIRECTORIES
    /prop_tgt/INTERFACE_LINK_LIBRARIES
+   /prop_tgt/INTERFACE_LINK_LIBRARIES_DIRECT
+   /prop_tgt/INTERFACE_LINK_LIBRARIES_DIRECT_EXCLUDE
    /prop_tgt/INTERFACE_LINK_OPTIONS
    /prop_tgt/INTERFACE_POSITION_INDEPENDENT_CODE
    /prop_tgt/INTERFACE_PRECOMPILE_HEADERS
@@ -274,6 +299,7 @@ Properties on Targets
    /prop_tgt/JOB_POOL_PRECOMPILE_HEADER
    /prop_tgt/LABELS
    /prop_tgt/LANG_CLANG_TIDY
+   /prop_tgt/LANG_CLANG_TIDY_EXPORT_FIXES_DIR
    /prop_tgt/LANG_COMPILER_LAUNCHER
    /prop_tgt/LANG_CPPCHECK
    /prop_tgt/LANG_CPPLINT
@@ -297,6 +323,9 @@ Properties on Targets
    /prop_tgt/LINK_INTERFACE_MULTIPLICITY
    /prop_tgt/LINK_INTERFACE_MULTIPLICITY_CONFIG
    /prop_tgt/LINK_LIBRARIES
+   /prop_tgt/LINK_LIBRARIES_ONLY_TARGETS
+   /prop_tgt/LINK_LIBRARY_OVERRIDE
+   /prop_tgt/LINK_LIBRARY_OVERRIDE_LIBRARY
    /prop_tgt/LINK_OPTIONS
    /prop_tgt/LINK_SEARCH_END_STATIC
    /prop_tgt/LINK_SEARCH_START_STATIC
@@ -312,6 +341,7 @@ Properties on Targets
    /prop_tgt/MACOSX_RPATH
    /prop_tgt/MANUALLY_ADDED_DEPENDENCIES
    /prop_tgt/MAP_IMPORTED_CONFIG_CONFIG
+   /prop_tgt/MSVC_DEBUG_INFORMATION_FORMAT
    /prop_tgt/MSVC_RUNTIME_LIBRARY
    /prop_tgt/NAME
    /prop_tgt/NO_SONAME
@@ -327,8 +357,8 @@ Properties on Targets
    /prop_tgt/OSX_ARCHITECTURES_CONFIG
    /prop_tgt/OUTPUT_NAME
    /prop_tgt/OUTPUT_NAME_CONFIG
-   /prop_tgt/PCH_WARN_INVALID
    /prop_tgt/PCH_INSTANTIATE_TEMPLATES
+   /prop_tgt/PCH_WARN_INVALID
    /prop_tgt/PDB_NAME
    /prop_tgt/PDB_NAME_CONFIG
    /prop_tgt/PDB_OUTPUT_DIRECTORY
@@ -360,6 +390,7 @@ Properties on Targets
    /prop_tgt/Swift_LANGUAGE_VERSION
    /prop_tgt/Swift_MODULE_DIRECTORY
    /prop_tgt/Swift_MODULE_NAME
+   /prop_tgt/SYSTEM
    /prop_tgt/TYPE
    /prop_tgt/UNITY_BUILD
    /prop_tgt/UNITY_BUILD_BATCH_SIZE
@@ -367,6 +398,7 @@ Properties on Targets
    /prop_tgt/UNITY_BUILD_CODE_BEFORE_INCLUDE
    /prop_tgt/UNITY_BUILD_MODE
    /prop_tgt/UNITY_BUILD_UNIQUE_ID
+   /prop_tgt/VERIFY_INTERFACE_HEADER_SETS
    /prop_tgt/VERSION
    /prop_tgt/VISIBILITY_INLINES_HIDDEN
    /prop_tgt/VS_CONFIGURATION_TYPE
@@ -380,6 +412,7 @@ Properties on Targets
    /prop_tgt/VS_DOTNET_REFERENCEPROP_refname_TAG_tagname
    /prop_tgt/VS_DOTNET_REFERENCES
    /prop_tgt/VS_DOTNET_REFERENCES_COPY_LOCAL
+   /prop_tgt/VS_DOTNET_STARTUP_OBJECT
    /prop_tgt/VS_DOTNET_TARGET_FRAMEWORK_VERSION
    /prop_tgt/VS_DPI_AWARE
    /prop_tgt/VS_GLOBAL_KEYWORD
@@ -391,6 +424,7 @@ Properties on Targets
    /prop_tgt/VS_JUST_MY_CODE_DEBUGGING
    /prop_tgt/VS_KEYWORD
    /prop_tgt/VS_MOBILE_EXTENSIONS_VERSION
+   /prop_tgt/VS_NO_COMPILE_BATCHING
    /prop_tgt/VS_NO_SOLUTION_DEPLOY
    /prop_tgt/VS_PACKAGE_REFERENCES
    /prop_tgt/VS_PLATFORM_TOOLSET
@@ -407,6 +441,7 @@ Properties on Targets
    /prop_tgt/VS_WINRT_COMPONENT
    /prop_tgt/VS_WINRT_EXTENSIONS
    /prop_tgt/VS_WINRT_REFERENCES
+   /prop_tgt/WATCOM_RUNTIME_LIBRARY
    /prop_tgt/WIN32_EXECUTABLE
    /prop_tgt/WINDOWS_EXPORT_ALL_SYMBOLS
    /prop_tgt/XCODE_ATTRIBUTE_an-attribute
@@ -428,9 +463,14 @@ Properties on Targets
    /prop_tgt/XCODE_SCHEME_DISABLE_MAIN_THREAD_CHECKER
    /prop_tgt/XCODE_SCHEME_DYNAMIC_LIBRARY_LOADS
    /prop_tgt/XCODE_SCHEME_DYNAMIC_LINKER_API_USAGE
+   /prop_tgt/XCODE_SCHEME_ENABLE_GPU_API_VALIDATION
+   /prop_tgt/XCODE_SCHEME_ENABLE_GPU_FRAME_CAPTURE_MODE
+   /prop_tgt/XCODE_SCHEME_ENABLE_GPU_SHADER_VALIDATION
    /prop_tgt/XCODE_SCHEME_ENVIRONMENT
    /prop_tgt/XCODE_SCHEME_EXECUTABLE
    /prop_tgt/XCODE_SCHEME_GUARD_MALLOC
+   /prop_tgt/XCODE_SCHEME_LAUNCH_CONFIGURATION
+   /prop_tgt/XCODE_SCHEME_LAUNCH_MODE
    /prop_tgt/XCODE_SCHEME_MAIN_THREAD_CHECKER_STOP
    /prop_tgt/XCODE_SCHEME_MALLOC_GUARD_EDGES
    /prop_tgt/XCODE_SCHEME_MALLOC_SCRIBBLE
@@ -441,6 +481,7 @@ Properties on Targets
    /prop_tgt/XCODE_SCHEME_UNDEFINED_BEHAVIOUR_SANITIZER_STOP
    /prop_tgt/XCODE_SCHEME_WORKING_DIRECTORY
    /prop_tgt/XCODE_SCHEME_ZOMBIE_OBJECTS
+   /prop_tgt/XCODE_XCCONFIG
    /prop_tgt/XCTEST
 
 .. _`Test Properties`:
@@ -492,6 +533,7 @@ Properties on Source Files
    /prop_sf/COMPILE_DEFINITIONS
    /prop_sf/COMPILE_FLAGS
    /prop_sf/COMPILE_OPTIONS
+   /prop_sf/CXX_SCAN_FOR_MODULES
    /prop_sf/EXTERNAL_OBJECT
    /prop_sf/Fortran_FORMAT
    /prop_sf/Fortran_PREPROCESS
@@ -577,6 +619,8 @@ Deprecated Properties on Directories
 
    /prop_dir/ADDITIONAL_MAKE_CLEAN_FILES
    /prop_dir/COMPILE_DEFINITIONS_CONFIG
+   /prop_dir/INTERPROCEDURAL_OPTIMIZATION
+   /prop_dir/INTERPROCEDURAL_OPTIMIZATION_CONFIG
    /prop_dir/TEST_INCLUDE_FILE
 
 

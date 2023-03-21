@@ -57,7 +57,7 @@ for you.
 
   If components ``Interpreter`` and ``Development`` (or one of its
   sub-components) are both specified, this module search only for interpreter
-  with same platform architecture as the one defined by ``CMake``
+  with same platform architecture as the one defined by CMake
   configuration. This constraint does not apply if only ``Interpreter``
   component is specified.
 
@@ -215,6 +215,11 @@ Hints
   * If set to TRUE, search **only** for static libraries.
   * If set to FALSE, search **only** for shared libraries.
 
+  .. note::
+
+    This hint will be ignored on ``Windows`` because static libraries are not
+    available on this platform.
+
 ``Python2_FIND_STRATEGY``
   .. versionadded:: 3.15
 
@@ -297,7 +302,7 @@ Hints
     ``Anaconda`` or ``ActivePython``, rely on this implementation.
   * ``IronPython``: This implementation use the ``CSharp`` language for
     ``.NET Framework`` on top of the `Dynamic Language Runtime` (``DLR``).
-    See `IronPython <http://ironpython.net>`_.
+    See `IronPython <https://ironpython.net>`_.
   * ``PyPy``: This implementation use ``RPython`` language and
     ``RPython translation toolchain`` to produce the python interpreter.
     See `PyPy <https://www.pypy.org>`_.
@@ -383,7 +388,7 @@ setting the following variables:
 
 By default, this module supports multiple calls in different directories of a
 project with different version/component requirements while providing correct
-and consistent results for each call. To support this behavior, ``CMake`` cache
+and consistent results for each call. To support this behavior, CMake cache
 is not used in the traditional way which can be problematic for interactive
 specification. So, to enable also interactive specification, module behavior
 can be controlled with the following variable:

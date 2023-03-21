@@ -2,10 +2,17 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudio12Generator.h"
 
-#include "cmAlgorithms.h"
-#include "cmDocumentationEntry.h"
-#include "cmLocalVisualStudio10Generator.h"
+#include <cstring>
+#include <sstream>
+#include <vector>
+
+#include "cmGlobalGenerator.h"
+#include "cmGlobalGeneratorFactory.h"
+#include "cmGlobalVisualStudioGenerator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
 
 static const char vs12generatorName[] = "Visual Studio 12 2013";
 
@@ -14,7 +21,7 @@ static const char* cmVS12GenName(const std::string& name, std::string& genName)
 {
   if (strncmp(name.c_str(), vs12generatorName,
               sizeof(vs12generatorName) - 6) != 0) {
-    return 0;
+    return nullptr;
   }
   const char* p = name.c_str() + sizeof(vs12generatorName) - 6;
   if (cmHasLiteralPrefix(p, " 2013")) {
@@ -54,11 +61,11 @@ public:
     return std::unique_ptr<cmGlobalGenerator>();
   }
 
-  void GetDocumentation(cmDocumentationEntry& entry) const override
+  cmDocumentationEntry GetDocumentation() const override
   {
-    entry.Name = std::string(vs12generatorName) + " [arch]";
-    entry.Brief = "Generates Visual Studio 2013 project files.  "
-                  "Optional [arch] can be \"Win64\" or \"ARM\".";
+    return { std::string(vs12generatorName) + " [arch]",
+             "Generates Visual Studio 2013 project files.  "
+             "Optional [arch] can be \"Win64\" or \"ARM\"." };
   }
 
   std::vector<std::string> GetGeneratorNames() const override
@@ -114,7 +121,7 @@ cmGlobalVisualStudio12Generator::cmGlobalVisualStudio12Generator(
   this->DefaultLinkFlagTableName = "v12";
   this->DefaultMasmFlagTableName = "v12";
   this->DefaultRCFlagTableName = "v12";
-  this->Version = VS12;
+  this->Version = VSVersion::VS12;
 }
 
 bool cmGlobalVisualStudio12Generator::MatchesGeneratorName(
@@ -130,7 +137,8 @@ bool cmGlobalVisualStudio12Generator::MatchesGeneratorName(
 bool cmGlobalVisualStudio12Generator::ProcessGeneratorToolsetField(
   std::string const& key, std::string const& value)
 {
-  if (key == "host" && (value == "x64" || value == "x86")) {
+  if (key == "host" &&
+      (value == "x64" || value == "x86" || value == "ARM64")) {
     this->GeneratorToolsetHostArchitecture = value;
     return true;
   }
@@ -186,9 +194,8 @@ bool cmGlobalVisualStudio12Generator::SelectWindowsPhoneToolset(
         this->IsWindowsDesktopToolsetInstalled()) {
       toolset = "v120_wp81";
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   return this->cmGlobalVisualStudio11Generator::SelectWindowsPhoneToolset(
     toolset);
@@ -202,9 +209,8 @@ bool cmGlobalVisualStudio12Generator::SelectWindowsStoreToolset(
         this->IsWindowsDesktopToolsetInstalled()) {
       toolset = "v120";
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   return this->cmGlobalVisualStudio11Generator::SelectWindowsStoreToolset(
     toolset);

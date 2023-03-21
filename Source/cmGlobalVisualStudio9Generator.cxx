@@ -2,13 +2,17 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudio9Generator.h"
 
+#include <cstring>
 #include <utility>
+#include <vector>
 
-#include "cmDocumentationEntry.h"
-#include "cmLocalVisualStudio7Generator.h"
-#include "cmMakefile.h"
-#include "cmMessageType.h"
+#include "cmGlobalGenerator.h"
+#include "cmGlobalGeneratorFactory.h"
+#include "cmGlobalVisualStudioGenerator.h"
+#include "cmSystemTools.h"
 #include "cmVisualStudioWCEPlatformParser.h"
+
+class cmake;
 
 static const char vs9generatorName[] = "Visual Studio 9 2008";
 
@@ -57,11 +61,11 @@ public:
     return std::unique_ptr<cmGlobalGenerator>(std::move(ret));
   }
 
-  void GetDocumentation(cmDocumentationEntry& entry) const override
+  cmDocumentationEntry GetDocumentation() const override
   {
-    entry.Name = std::string(vs9generatorName) + " [arch]";
-    entry.Brief = "Generates Visual Studio 2008 project files.  "
-                  "Optional [arch] can be \"Win64\" or \"IA64\".";
+    return { std::string(vs9generatorName) + " [arch]",
+             "Generates Visual Studio 2008 project files.  "
+             "Optional [arch] can be \"Win64\" or \"IA64\"." };
   }
 
   std::vector<std::string> GetGeneratorNames() const override
@@ -119,7 +123,7 @@ cmGlobalVisualStudio9Generator::cmGlobalVisualStudio9Generator(
   std::string const& platformInGeneratorName)
   : cmGlobalVisualStudio8Generator(cm, name, platformInGeneratorName)
 {
-  this->Version = VS9;
+  this->Version = VSVersion::VS9;
   std::string vc9Express;
   this->ExpressEdition = cmSystemTools::ReadRegistryValue(
     "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VCExpress\\9.0\\Setup\\VC;"
@@ -154,5 +158,5 @@ std::string cmGlobalVisualStudio9Generator::GetUserMacrosDirectory()
 
 std::string cmGlobalVisualStudio9Generator::GetUserMacrosRegKeyBase()
 {
-  return "Software\\Microsoft\\VisualStudio\\9.0\\vsmacros";
+  return R"(Software\Microsoft\VisualStudio\9.0\vsmacros)";
 }

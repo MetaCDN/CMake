@@ -18,10 +18,6 @@ cmLinkLineComputer::cmLinkLineComputer(cmOutputConverter* outputConverter,
                                        cmStateDirectory const& stateDir)
   : StateDir(stateDir)
   , OutputConverter(outputConverter)
-  , ForResponse(false)
-  , UseWatcomQuote(false)
-  , UseNinjaMulti(false)
-  , Relink(false)
 {
 }
 
@@ -75,14 +71,8 @@ void cmLinkLineComputer::ComputeLinkLibs(
 
     BT<std::string> linkLib;
     if (item.IsPath == cmComputeLinkInformation::ItemIsPath::Yes) {
-      if (item.IsObject == cmComputeLinkInformation::ItemIsObject::Yes) {
-        linkLib.Value += cli.GetObjLinkFileFlag();
-      } else {
-        linkLib.Value += cli.GetLibLinkFileFlag();
-      }
-      linkLib.Value += this->ConvertToOutputFormat(
-        this->ConvertToLinkReference(item.Value.Value));
-      linkLib.Backtrace = item.Value.Backtrace;
+      linkLib = item.GetFormattedItem(this->ConvertToOutputFormat(
+        this->ConvertToLinkReference(item.Value.Value)));
     } else {
       linkLib = item.Value;
     }
@@ -97,13 +87,12 @@ std::string cmLinkLineComputer::ConvertToOutputFormat(std::string const& input)
   cmOutputConverter::OutputFormat shellFormat = cmOutputConverter::SHELL;
   if (this->ForResponse) {
     shellFormat = cmOutputConverter::RESPONSE;
-  } else if (this->UseWatcomQuote) {
-    shellFormat = cmOutputConverter::WATCOMQUOTE;
   } else if (this->UseNinjaMulti) {
     shellFormat = cmOutputConverter::NINJAMULTI;
   }
 
-  return this->OutputConverter->ConvertToOutputFormat(input, shellFormat);
+  return this->OutputConverter->ConvertToOutputFormat(input, shellFormat,
+                                                      this->UseWatcomQuote);
 }
 
 std::string cmLinkLineComputer::ConvertToOutputForExisting(
@@ -112,13 +101,12 @@ std::string cmLinkLineComputer::ConvertToOutputForExisting(
   cmOutputConverter::OutputFormat shellFormat = cmOutputConverter::SHELL;
   if (this->ForResponse) {
     shellFormat = cmOutputConverter::RESPONSE;
-  } else if (this->UseWatcomQuote) {
-    shellFormat = cmOutputConverter::WATCOMQUOTE;
   } else if (this->UseNinjaMulti) {
     shellFormat = cmOutputConverter::NINJAMULTI;
   }
 
-  return this->OutputConverter->ConvertToOutputForExisting(input, shellFormat);
+  return this->OutputConverter->ConvertToOutputForExisting(
+    input, shellFormat, this->UseWatcomQuote);
 }
 
 std::string cmLinkLineComputer::ComputeLinkPath(

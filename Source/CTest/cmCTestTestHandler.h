@@ -5,6 +5,7 @@
 #include "cmConfigure.h" // IWYU pragma: keep
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <iosfwd>
 #include <map>
@@ -13,13 +14,12 @@
 #include <utility>
 #include <vector>
 
-#include <stddef.h>
-
 #include "cmsys/RegularExpression.hxx"
 
 #include "cmCTest.h"
 #include "cmCTestGenericHandler.h"
 #include "cmCTestResourceSpec.h"
+#include "cmCTestTypes.h"
 #include "cmDuration.h"
 #include "cmListFileCache.h"
 #include "cmValue.h"
@@ -33,6 +33,7 @@ class cmXMLWriter;
  */
 class cmCTestTestHandler : public cmCTestGenericHandler
 {
+  friend class cmCTest;
   friend class cmCTestRunTest;
   friend class cmCTestMultiProcessHandler;
 
@@ -80,6 +81,9 @@ public:
   {
     this->CustomMaximumFailedTestOutputSize = n;
   }
+
+  //! Set test output truncation mode. Return false if unknown mode.
+  bool SetTestOutputTruncation(const std::string& mode);
 
   //! pass the -I argument down
   void SetTestsToRunInformation(cmValue);
@@ -243,8 +247,9 @@ protected:
   void AttachFile(cmXMLWriter& xml, std::string const& file,
                   std::string const& name);
 
-  //! Clean test output to specified length
-  void CleanTestOutput(std::string& output, size_t length);
+  //! Clean test output to specified length and truncation mode
+  void CleanTestOutput(std::string& output, size_t length,
+                       cmCTestTypes::TruncationMode truncate);
 
   cmDuration ElapsedTestingTime;
 
@@ -259,6 +264,7 @@ protected:
   bool MemCheck;
   int CustomMaximumPassedTestOutputSize;
   int CustomMaximumFailedTestOutputSize;
+  cmCTestTypes::TruncationMode TestOutputTruncation;
   int MaxIndex;
 
 public:

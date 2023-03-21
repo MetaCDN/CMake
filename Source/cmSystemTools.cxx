@@ -11,11 +11,17 @@
 // NOLINTNEXTLINE(bugprone-reserved-identifier)
 #  define _XOPEN_SOURCE 700
 #endif
+#if defined(__APPLE__)
+// Restore Darwin APIs removed by _POSIX_C_SOURCE.
+// NOLINTNEXTLINE(bugprone-reserved-identifier)
+#  define _DARWIN_C_SOURCE
+#endif
 
 #include "cmSystemTools.h"
 
 #include <cm/optional>
 #include <cmext/algorithm>
+#include <cmext/string_view>
 
 #include <cm3p/uv.h>
 
@@ -87,7 +93,6 @@
 #  include <unistd.h>
 
 #  include <sys/time.h>
-#  include <sys/types.h>
 #endif
 
 #if defined(_WIN32) &&                                                        \
@@ -105,6 +110,10 @@
 
 #if !defined(_WIN32) && !defined(__ANDROID__)
 #  include <sys/utsname.h>
+#endif
+
+#if defined(_MSC_VER) && _MSC_VER >= 1800
+#  define CM_WINDOWS_DEPRECATED_GetVersionEx
 #endif
 
 namespace {
@@ -156,8 +165,8 @@ static int cm_archive_read_open_file(struct archive* a, const char* file,
 
 bool cmSystemTools::s_RunCommandHideConsole = false;
 bool cmSystemTools::s_DisableRunCommandOutput = false;
-bool cmSystemTools::s_ErrorOccured = false;
-bool cmSystemTools::s_FatalErrorOccured = false;
+bool cmSystemTools::s_ErrorOccurred = false;
+bool cmSystemTools::s_FatalErrorOccurred = false;
 bool cmSystemTools::s_ForceUnixPaths = false;
 
 // replace replace with with as many times as it shows up in source.
@@ -212,7 +221,7 @@ std::string cmSystemTools::HelpFileName(cm::string_view str)
 void cmSystemTools::Error(const std::string& m)
 {
   std::string message = "CMake Error: " + m;
-  cmSystemTools::s_ErrorOccured = true;
+  cmSystemTools::s_ErrorOccurred = true;
   cmSystemTools::Message(message, "Error");
 }
 
@@ -540,7 +549,7 @@ size_t cmSystemTools::CalculateCommandLineLengthLimit()
 #if defined(_SC_ARG_MAX)
   // ARG_MAX is the maximum size of the command and environment
   // that can be passed to the exec functions on UNIX.
-  // The value in limits.h does not need to be present and may
+  // The value in climits does not need to be present and may
   // depend upon runtime memory constraints, hence sysconf()
   // should be used to query it.
   long szArgMax = sysconf(_SC_ARG_MAX);
@@ -904,6 +913,40 @@ cmSystemTools::WindowsFileRetry cmSystemTools::GetWindowsDirectoryRetry()
     InitWindowsDirectoryRetry().Retry;
   return retry;
 }
+
+cmSystemTools::WindowsVersion cmSystemTools::GetWindowsVersion()
+{
+  /* Windows version number data.  */
+  OSVERSIONINFOEXW osviex;
+  ZeroMemory(&osviex, sizeof(osviex));
+  osviex.dwOSVersionInfoSize = sizeof(osviex);
+
+#  ifdef CM_WINDOWS_DEPRECATED_GetVersionEx
+#    pragma warning(push)
+#    ifdef __INTEL_COMPILER
+#      pragma warning(disable : 1478)
+#    elif defined __clang__
+#      pragma clang diagnostic push
+#      pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#    else
+#      pragma warning(disable : 4996)
+#    endif
+#  endif
+  GetVersionExW((OSVERSIONINFOW*)&osviex);
+#  ifdef CM_WINDOWS_DEPRECATED_GetVersionEx
+#    ifdef __clang__
+#      pragma clang diagnostic pop
+#    else
+#      pragma warning(pop)
+#    endif
+#  endif
+
+  WindowsVersion result;
+  result.dwMajorVersion = osviex.dwMajorVersion;
+  result.dwMinorVersion = osviex.dwMinorVersion;
+  result.dwBuildNumber = osviex.dwBuildNumber;
+  return result;
+}
 #endif
 
 std::string cmSystemTools::GetRealPathResolvingWindowsSubst(
@@ -962,6 +1005,93 @@ void cmSystemTools::InitializeLibUV()
 #endif
 }
 
+#if defined(_WIN32)
+#  include <random>
+
+#  include <wctype.h>
+#  ifdef _MSC_VER
+using mode_t = cmSystemTools::SystemTools::mode_t;
+#  endif
+#else
+#  include <sys/stat.h>
+#endif
+
+inline int Mkdir(const char* dir, const mode_t* mode)
+{
+#if defined(_WIN32)
+  int ret = _wmkdir(cmSystemTools::ConvertToWindowsExtendedPath(dir).c_str());
+  if (ret == 0 && mode)
+    cmSystemTools::SystemTools::SetPermissions(dir, *mode);
+  return ret;
+#else
+  return mkdir(dir, mode ? *mode : 0777);
+#endif
+}
+
+cmsys::Status cmSystemTools::MakeTempDirectory(std::string& path,
+                                               const mode_t* mode)
+{
+  if (path.empty()) {
+    return cmsys::Status::POSIX(EINVAL);
+  }
+  return cmSystemTools::MakeTempDirectory(&path.front(), mode);
+}
+
+cmsys::Status cmSystemTools::MakeTempDirectory(char* path, const mode_t* mode)
+{
+  if (!path) {
+    return cmsys::Status::POSIX(EINVAL);
+  }
+
+  // verify that path ends with "XXXXXX"
+  const auto l = std::strlen(path);
+  if (!cmHasLiteralSuffix(cm::string_view{ path, l }, "XXXXXX")) {
+    return cmsys::Status::POSIX(EINVAL);
+  }
+
+  // create parent directories
+  auto* sep = path;
+  while ((sep = strchr(sep, '/'))) {
+    // all underlying functions use C strings,
+    // so temporarily end the string here
+    *sep = '\0';
+    Mkdir(path, mode);
+
+    *sep = '/';
+    ++sep;
+  }
+
+#ifdef _WIN32
+  const int nchars = 36;
+  const char chars[nchars + 1] = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+  std::random_device rd;
+  std::mt19937 rg{ rd() };
+  std::uniform_int_distribution<int> dist{ 0, nchars - 1 };
+
+  for (auto tries = 100; tries; --tries) {
+    for (auto n = l - 6; n < l; ++n) {
+      path[n] = chars[dist(rg)];
+    }
+    if (Mkdir(path, mode) == 0) {
+      return cmsys::Status::Success();
+    } else if (errno != EEXIST) {
+      return cmsys::Status::POSIX_errno();
+    }
+  }
+  return cmsys::Status::POSIX(EAGAIN);
+#else
+  if (mkdtemp(path)) {
+    if (mode) {
+      chmod(path, *mode);
+    }
+  } else {
+    return cmsys::Status::POSIX_errno();
+  }
+  return cmsys::Status::Success();
+#endif
+}
+
 #ifdef _WIN32
 namespace {
 bool cmMoveFile(std::wstring const& oldname, std::wstring const& newname,
@@ -981,16 +1111,9 @@ bool cmMoveFile(std::wstring const& oldname, std::wstring const& newname,
 }
 #endif
 
-bool cmSystemTools::CopySingleFile(const std::string& oldname,
-                                   const std::string& newname)
-{
-  return cmSystemTools::CopySingleFile(oldname, newname, CopyWhen::Always) ==
-    CopyResult::Success;
-}
-
 cmSystemTools::CopyResult cmSystemTools::CopySingleFile(
   std::string const& oldname, std::string const& newname, CopyWhen when,
-  std::string* err)
+  CopyInputRecent inputRecent, std::string* err)
 {
   switch (when) {
     case CopyWhen::Always:
@@ -1010,23 +1133,50 @@ cmSystemTools::CopyResult cmSystemTools::CopySingleFile(
     return CopyResult::Success;
   }
 
-  cmsys::Status status;
+  cmsys::SystemTools::CopyStatus status;
   status = cmsys::SystemTools::CloneFileContent(oldname, newname);
   if (!status) {
     // if cloning did not succeed, fall back to blockwise copy
+#ifdef _WIN32
+    if (inputRecent == CopyInputRecent::Yes) {
+      // Windows sometimes locks a file immediately after creation.
+      // Retry a few times.
+      WindowsFileRetry retry = cmSystemTools::GetWindowsFileRetry();
+      while ((status =
+                cmsys::SystemTools::CopyFileContentBlockwise(oldname, newname),
+              status.Path == cmsys::SystemTools::CopyStatus::SourcePath &&
+                status.GetPOSIX() == EACCES && --retry.Count)) {
+        cmSystemTools::Delay(retry.Delay);
+      }
+    } else {
+      status = cmsys::SystemTools::CopyFileContentBlockwise(oldname, newname);
+    }
+#else
+    static_cast<void>(inputRecent);
     status = cmsys::SystemTools::CopyFileContentBlockwise(oldname, newname);
+#endif
   }
   if (!status) {
     if (err) {
       *err = status.GetString();
+      switch (status.Path) {
+        case cmsys::SystemTools::CopyStatus::SourcePath:
+          *err = cmStrCat(*err, " (input)");
+          break;
+        case cmsys::SystemTools::CopyStatus::DestPath:
+          *err = cmStrCat(*err, " (output)");
+          break;
+        default:
+          break;
+      }
     }
     return CopyResult::Failure;
   }
   if (perms) {
-    status = SystemTools::SetPermissions(newname, perm);
-    if (!status) {
+    perms = SystemTools::SetPermissions(newname, perm);
+    if (!perms) {
       if (err) {
-        *err = status.GetString();
+        *err = cmStrCat(perms.GetString(), " (output)");
       }
       return CopyResult::Failure;
     }
@@ -1158,39 +1308,26 @@ void cmSystemTools::MoveFileIfDifferent(const std::string& source,
   RemoveFile(source);
 }
 
+#ifndef CMAKE_BOOTSTRAP
 std::string cmSystemTools::ComputeFileHash(const std::string& source,
                                            cmCryptoHash::Algo algo)
 {
-#if !defined(CMAKE_BOOTSTRAP)
   cmCryptoHash hash(algo);
   return hash.HashFile(source);
-#else
-  (void)source;
-  cmSystemTools::Message("hashsum not supported in bootstrapping mode",
-                         "Error");
-  return std::string();
-#endif
 }
 
 std::string cmSystemTools::ComputeStringMD5(const std::string& input)
 {
-#if !defined(CMAKE_BOOTSTRAP)
   cmCryptoHash md5(cmCryptoHash::AlgoMD5);
   return md5.HashString(input);
-#else
-  (void)input;
-  cmSystemTools::Message("md5sum not supported in bootstrapping mode",
-                         "Error");
-  return "";
-#endif
 }
 
+#  ifdef _WIN32
 std::string cmSystemTools::ComputeCertificateThumbprint(
   const std::string& source)
 {
   std::string thumbprint;
 
-#if !defined(CMAKE_BOOTSTRAP) && defined(_WIN32)
   CRYPT_INTEGER_BLOB cryptBlob;
   HCERTSTORE certStore = NULL;
   PCCERT_CONTEXT certContext = NULL;
@@ -1231,7 +1368,7 @@ std::string cmSystemTools::ComputeCertificateThumbprint(
                       certContext, CERT_HASH_PROP_ID, hashData, &hashLength)) {
                   for (DWORD i = 0; i < hashLength; i++) {
                     // Convert each byte to hexadecimal
-                    sprintf(pHashPrint, "%02X", hashData[i]);
+                    snprintf(pHashPrint, 3, "%02X", hashData[i]);
                     pHashPrint += 2;
                   }
                   *pHashPrint = '\0';
@@ -1247,14 +1384,11 @@ std::string cmSystemTools::ComputeCertificateThumbprint(
     }
     CloseHandle(certFile);
   }
-#else
-  (void)source;
-  cmSystemTools::Message("ComputeCertificateThumbprint is not implemented",
-                         "Error");
-#endif
 
   return thumbprint;
 }
+#  endif
+#endif
 
 void cmSystemTools::Glob(const std::string& directory,
                          const std::string& regexp,
@@ -1517,8 +1651,7 @@ std::string cmSystemTools::RelativeIfUnder(std::string const& top,
 bool cmSystemTools::UnsetEnv(const char* value)
 {
 #  if !defined(HAVE_UNSETENV)
-  std::string var = cmStrCat(value, '=');
-  return cmSystemTools::PutEnv(var);
+  return cmSystemTools::UnPutEnv(value);
 #  else
   unsetenv(value);
   return true;
@@ -1529,9 +1662,18 @@ std::vector<std::string> cmSystemTools::GetEnvironmentVariables()
 {
   std::vector<std::string> env;
   int cc;
+#  ifdef _WIN32
+  // if program starts with main, _wenviron is initially NULL, call to
+  // _wgetenv and create wide-character string environment
+  _wgetenv(L"");
+  for (cc = 0; _wenviron[cc]; ++cc) {
+    env.emplace_back(cmsys::Encoding::ToNarrow(_wenviron[cc]));
+  }
+#  else
   for (cc = 0; environ[cc]; ++cc) {
     env.emplace_back(environ[cc]);
   }
+#  endif
   return env;
 }
 
@@ -1539,6 +1681,144 @@ void cmSystemTools::AppendEnv(std::vector<std::string> const& env)
 {
   for (std::string const& eit : env) {
     cmSystemTools::PutEnv(eit);
+  }
+}
+
+void cmSystemTools::EnvDiff::AppendEnv(std::vector<std::string> const& env)
+{
+  for (std::string const& eit : env) {
+    this->PutEnv(eit);
+  }
+}
+
+void cmSystemTools::EnvDiff::PutEnv(const std::string& env)
+{
+  auto const eq_loc = env.find('=');
+  if (eq_loc != std::string::npos) {
+    std::string name = env.substr(0, eq_loc);
+    diff[name] = env.substr(eq_loc + 1);
+  } else {
+    this->UnPutEnv(env);
+  }
+}
+
+void cmSystemTools::EnvDiff::UnPutEnv(const std::string& env)
+{
+  diff[env] = {};
+}
+
+bool cmSystemTools::EnvDiff::ParseOperation(const std::string& envmod)
+{
+  char path_sep = GetSystemPathlistSeparator();
+
+  auto apply_diff = [this](const std::string& name,
+                           std::function<void(std::string&)> const& apply) {
+    cm::optional<std::string> old_value = diff[name];
+    std::string output;
+    if (old_value) {
+      output = *old_value;
+    } else {
+      const char* curval = cmSystemTools::GetEnv(name);
+      if (curval) {
+        output = curval;
+      }
+    }
+    apply(output);
+    diff[name] = output;
+  };
+
+  // Split on `=`
+  auto const eq_loc = envmod.find_first_of('=');
+  if (eq_loc == std::string::npos) {
+    cmSystemTools::Error(cmStrCat(
+      "Error: Missing `=` after the variable name in: ", envmod, '\n'));
+    return false;
+  }
+
+  auto const name = envmod.substr(0, eq_loc);
+
+  // Split value on `:`
+  auto const op_value_start = eq_loc + 1;
+  auto const colon_loc = envmod.find_first_of(':', op_value_start);
+  if (colon_loc == std::string::npos) {
+    cmSystemTools::Error(
+      cmStrCat("Error: Missing `:` after the operation in: ", envmod, '\n'));
+    return false;
+  }
+  auto const op = envmod.substr(op_value_start, colon_loc - op_value_start);
+
+  auto const value_start = colon_loc + 1;
+  auto const value = envmod.substr(value_start);
+
+  // Determine what to do with the operation.
+  if (op == "reset"_s) {
+    auto entry = diff.find(name);
+    if (entry != diff.end()) {
+      diff.erase(entry);
+    }
+  } else if (op == "set"_s) {
+    diff[name] = value;
+  } else if (op == "unset"_s) {
+    diff[name] = {};
+  } else if (op == "string_append"_s) {
+    apply_diff(name, [&value](std::string& output) { output += value; });
+  } else if (op == "string_prepend"_s) {
+    apply_diff(name,
+               [&value](std::string& output) { output.insert(0, value); });
+  } else if (op == "path_list_append"_s) {
+    apply_diff(name, [&value, path_sep](std::string& output) {
+      if (!output.empty()) {
+        output += path_sep;
+      }
+      output += value;
+    });
+  } else if (op == "path_list_prepend"_s) {
+    apply_diff(name, [&value, path_sep](std::string& output) {
+      if (!output.empty()) {
+        output.insert(output.begin(), path_sep);
+      }
+      output.insert(0, value);
+    });
+  } else if (op == "cmake_list_append"_s) {
+    apply_diff(name, [&value](std::string& output) {
+      if (!output.empty()) {
+        output += ';';
+      }
+      output += value;
+    });
+  } else if (op == "cmake_list_prepend"_s) {
+    apply_diff(name, [&value](std::string& output) {
+      if (!output.empty()) {
+        output.insert(output.begin(), ';');
+      }
+      output.insert(0, value);
+    });
+  } else {
+    cmSystemTools::Error(cmStrCat(
+      "Error: Unrecognized environment manipulation argument: ", op, '\n'));
+    return false;
+  }
+
+  return true;
+}
+
+void cmSystemTools::EnvDiff::ApplyToCurrentEnv(std::ostringstream* measurement)
+{
+  for (auto const& env_apply : diff) {
+    if (env_apply.second) {
+      auto const env_update =
+        cmStrCat(env_apply.first, '=', *env_apply.second);
+      cmSystemTools::PutEnv(env_update);
+      if (measurement) {
+        *measurement << env_update << std::endl;
+      }
+    } else {
+      cmSystemTools::UnsetEnv(env_apply.first.c_str());
+      if (measurement) {
+        // Signify that this variable is being actively unset
+        *measurement << '#' << env_apply.first << "=\n";
+      }
+    }
   }
 }
 
@@ -1693,7 +1973,8 @@ void list_item_verbose(FILE* out, struct archive_entry* entry)
   /* Use uname if it's present, else uid. */
   p = archive_entry_uname(entry);
   if ((p == nullptr) || (*p == '\0')) {
-    sprintf(tmp, "%lu ", static_cast<unsigned long>(archive_entry_uid(entry)));
+    snprintf(tmp, sizeof(tmp), "%lu ",
+             static_cast<unsigned long>(archive_entry_uid(entry)));
     p = tmp;
   }
   w = strlen(p);
@@ -1707,7 +1988,8 @@ void list_item_verbose(FILE* out, struct archive_entry* entry)
     fprintf(out, "%s", p);
     w = strlen(p);
   } else {
-    sprintf(tmp, "%lu", static_cast<unsigned long>(archive_entry_gid(entry)));
+    snprintf(tmp, sizeof(tmp), "%lu",
+             static_cast<unsigned long>(archive_entry_gid(entry)));
     w = strlen(tmp);
     fprintf(out, "%s", tmp);
   }
@@ -1721,15 +2003,15 @@ void list_item_verbose(FILE* out, struct archive_entry* entry)
       archive_entry_filetype(entry) == AE_IFBLK) {
     unsigned long rdevmajor = archive_entry_rdevmajor(entry);
     unsigned long rdevminor = archive_entry_rdevminor(entry);
-    sprintf(tmp, "%lu,%lu", rdevmajor, rdevminor);
+    snprintf(tmp, sizeof(tmp), "%lu,%lu", rdevmajor, rdevminor);
   } else {
     /*
      * Note the use of platform-dependent macros to format
      * the filesize here.  We need the format string and the
      * corresponding type for the cast.
      */
-    sprintf(tmp, BSDTAR_FILESIZE_PRINTF,
-            static_cast<BSDTAR_FILESIZE_TYPE>(archive_entry_size(entry)));
+    snprintf(tmp, sizeof(tmp), BSDTAR_FILESIZE_PRINTF,
+             static_cast<BSDTAR_FILESIZE_TYPE>(archive_entry_size(entry)));
   }
   if (w + strlen(tmp) >= gs_width) {
     gs_width = w + strlen(tmp) + 1;
@@ -1835,6 +2117,7 @@ bool copy_data(struct archive* ar, struct archive* aw)
 
 bool extract_tar(const std::string& outFileName,
                  const std::vector<std::string>& files, bool verbose,
+                 cmSystemTools::cmTarExtractTimestamps extractTimestamps,
                  bool extract)
 {
   cmLocaleRAII localeRAII;
@@ -1893,10 +2176,12 @@ bool extract_tar(const std::string& outFileName,
       cmSystemTools::Stdout("\n");
     }
     if (extract) {
-      r = archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME);
-      if (r != ARCHIVE_OK) {
-        ArchiveError("Problem with archive_write_disk_set_options(): ", ext);
-        break;
+      if (extractTimestamps == cmSystemTools::cmTarExtractTimestamps::Yes) {
+        r = archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_TIME);
+        if (r != ARCHIVE_OK) {
+          ArchiveError("Problem with archive_write_disk_set_options(): ", ext);
+          break;
+        }
       }
 
       r = archive_write_header(ext, entry);
@@ -1956,13 +2241,15 @@ bool extract_tar(const std::string& outFileName,
 
 bool cmSystemTools::ExtractTar(const std::string& outFileName,
                                const std::vector<std::string>& files,
+                               cmTarExtractTimestamps extractTimestamps,
                                bool verbose)
 {
 #if !defined(CMAKE_BOOTSTRAP)
-  return extract_tar(outFileName, files, verbose, true);
+  return extract_tar(outFileName, files, verbose, extractTimestamps, true);
 #else
   (void)outFileName;
   (void)files;
+  (void)extractTimestamps;
   (void)verbose;
   return false;
 #endif
@@ -1973,7 +2260,8 @@ bool cmSystemTools::ListTar(const std::string& outFileName,
                             bool verbose)
 {
 #if !defined(CMAKE_BOOTSTRAP)
-  return extract_tar(outFileName, files, verbose, false);
+  return extract_tar(outFileName, files, verbose, cmTarExtractTimestamps::Yes,
+                     false);
 #else
   (void)outFileName;
   (void)files;
@@ -2003,7 +2291,7 @@ int cmSystemTools::WaitForLine(cmsysProcess* process, std::string& line,
           --length;
         }
         if (length > 0) {
-          line.append(&out[0], length);
+          line.append(out.data(), length);
         }
         out.erase(out.begin(), outiter + 1);
         return cmsysProcess_Pipe_STDOUT;
@@ -2021,7 +2309,7 @@ int cmSystemTools::WaitForLine(cmsysProcess* process, std::string& line,
           --length;
         }
         if (length > 0) {
-          line.append(&err[0], length);
+          line.append(err.data(), length);
         }
         err.erase(err.begin(), erriter + 1);
         return cmsysProcess_Pipe_STDERR;
@@ -2065,12 +2353,12 @@ int cmSystemTools::WaitForLine(cmsysProcess* process, std::string& line,
         erriter = err.begin() + size;
       }
       if (!out.empty()) {
-        line.append(&out[0], outiter - out.begin());
+        line.append(out.data(), outiter - out.begin());
         out.erase(out.begin(), out.end());
         return cmsysProcess_Pipe_STDOUT;
       }
       if (!err.empty()) {
-        line.append(&err[0], erriter - err.begin());
+        line.append(err.data(), erriter - err.begin());
         err.erase(err.begin(), err.end());
         return cmsysProcess_Pipe_STDERR;
       }
@@ -2496,8 +2784,8 @@ bool cmSystemTools::GuessLibraryInstallName(std::string const& fullPath,
   return false;
 }
 
-std::string::size_type cmSystemToolsFindRPath(cm::string_view const& have,
-                                              cm::string_view const& want)
+static std::string::size_type cmSystemToolsFindRPath(
+  cm::string_view const& have, cm::string_view const& want)
 {
   std::string::size_type pos = 0;
   while (pos < have.size()) {
@@ -2694,11 +2982,11 @@ std::function<bool(std::string*, const cmELF&)> MakeEmptyCallback(
 }
 }
 
-cm::optional<bool> ChangeRPathELF(std::string const& file,
-                                  std::string const& oldRPath,
-                                  std::string const& newRPath,
-                                  bool removeEnvironmentRPath,
-                                  std::string* emsg, bool* changed)
+static cm::optional<bool> ChangeRPathELF(std::string const& file,
+                                         std::string const& oldRPath,
+                                         std::string const& newRPath,
+                                         bool removeEnvironmentRPath,
+                                         std::string* emsg, bool* changed)
 {
   auto adjustCallback = [oldRPath, newRPath, removeEnvironmentRPath](
                           cm::optional<std::string>& outRPath,
@@ -2756,7 +3044,7 @@ static cm::optional<bool> SetRPathELF(std::string const& file,
 {
   auto adjustCallback = [newRPath](cm::optional<std::string>& outRPath,
                                    const std::string& inRPath,
-                                   const char* /*se_name*/, std::string *
+                                   const char* /*se_name*/, std::string*
                                    /*emsg*/) -> bool {
     if (inRPath != newRPath) {
       outRPath = newRPath;
@@ -2869,6 +3157,14 @@ bool cmSystemTools::ChangeRPath(std::string const& file,
         file, oldRPath, newRPath, removeEnvironmentRPath, emsg, changed)) {
     return result.value();
   }
+  // The file format is not recognized.  Assume it has no RPATH.
+  if (newRPath.empty()) {
+    // The caller wanted no RPATH anyway.
+    return true;
+  }
+  if (emsg) {
+    *emsg = "The file format is not recognized.";
+  }
   return false;
 }
 
@@ -2882,6 +3178,14 @@ bool cmSystemTools::SetRPath(std::string const& file,
   if (cm::optional<bool> result =
         SetRPathXCOFF(file, newRPath, emsg, changed)) {
     return result.value();
+  }
+  // The file format is not recognized.  Assume it has no RPATH.
+  if (newRPath.empty()) {
+    // The caller wanted no RPATH anyway.
+    return true;
+  }
+  if (emsg) {
+    *emsg = "The file format is not recognized.";
   }
   return false;
 }
@@ -3141,7 +3445,7 @@ static cm::optional<bool> RemoveRPathELF(std::string const& file,
     }
     return false;
   }
-  if (!f.write(&bytes[0], bytes.size())) {
+  if (!f.write(bytes.data(), bytes.size())) {
     if (emsg) {
       *emsg = "Error replacing DYNAMIC table header.";
     }
@@ -3212,7 +3516,8 @@ bool cmSystemTools::RemoveRPath(std::string const& file, std::string* emsg,
   if (cm::optional<bool> result = RemoveRPathXCOFF(file, emsg, removed)) {
     return result.value();
   }
-  return false;
+  // The file format is not recognized.  Assume it has no RPATH.
+  return true;
 }
 
 bool cmSystemTools::CheckRPath(std::string const& file,
@@ -3252,9 +3557,9 @@ bool cmSystemTools::CheckRPath(std::string const& file,
     return false;
   }
 #endif
-  (void)file;
-  (void)newRPath;
-  return false;
+  // The file format is not recognized.  Assume it has no RPATH.
+  // Therefore we succeed if the new rpath is empty anyway.
+  return newRPath.empty();
 }
 
 bool cmSystemTools::RepeatedRemoveDirectory(const std::string& dir)
@@ -3289,7 +3594,7 @@ std::string cmSystemTools::EncodeURL(std::string const& in, bool escapeSlashes)
       case ' ':
       case '=':
       case '%':
-        sprintf(hexCh, "%%%02X", static_cast<int>(c));
+        snprintf(hexCh, sizeof(hexCh), "%%%02X", static_cast<int>(c));
         break;
       case '/':
         if (escapeSlashes) {
@@ -3305,8 +3610,19 @@ std::string cmSystemTools::EncodeURL(std::string const& in, bool escapeSlashes)
 }
 
 cmsys::Status cmSystemTools::CreateSymlink(std::string const& origName,
-                                           std::string const& newName,
-                                           std::string* errorMessage)
+                                           std::string const& newName)
+{
+  cmsys::Status status =
+    cmSystemTools::CreateSymlinkQuietly(origName, newName);
+  if (!status) {
+    cmSystemTools::Error(cmStrCat("failed to create symbolic link '", newName,
+                                  "': ", status.GetString()));
+  }
+  return status;
+}
+
+cmsys::Status cmSystemTools::CreateSymlinkQuietly(std::string const& origName,
+                                                  std::string const& newName)
 {
   uv_fs_t req;
   int flags = 0;
@@ -3326,20 +3642,23 @@ cmsys::Status cmSystemTools::CreateSymlink(std::string const& origName,
 #else
     status = cmsys::Status::POSIX(-err);
 #endif
-    std::string e = cmStrCat("failed to create symbolic link '", newName,
-                             "': ", status.GetString());
-    if (errorMessage) {
-      *errorMessage = std::move(e);
-    } else {
-      cmSystemTools::Error(e);
-    }
   }
   return status;
 }
 
 cmsys::Status cmSystemTools::CreateLink(std::string const& origName,
-                                        std::string const& newName,
-                                        std::string* errorMessage)
+                                        std::string const& newName)
+{
+  cmsys::Status status = cmSystemTools::CreateLinkQuietly(origName, newName);
+  if (!status) {
+    cmSystemTools::Error(
+      cmStrCat("failed to create link '", newName, "': ", status.GetString()));
+  }
+  return status;
+}
+
+cmsys::Status cmSystemTools::CreateLinkQuietly(std::string const& origName,
+                                               std::string const& newName)
 {
   uv_fs_t req;
   int err =
@@ -3353,13 +3672,6 @@ cmsys::Status cmSystemTools::CreateLink(std::string const& origName,
 #else
     status = cmsys::Status::POSIX(-err);
 #endif
-    std::string e =
-      cmStrCat("failed to create link '", newName, "': ", status.GetString());
-    if (errorMessage) {
-      *errorMessage = std::move(e);
-    } else {
-      cmSystemTools::Error(e);
-    }
   }
   return status;
 }
@@ -3408,5 +3720,14 @@ cm::string_view cmSystemTools::GetSystemName()
     return systemName;
   }
   return "";
+#endif
+}
+
+char cmSystemTools::GetSystemPathlistSeparator()
+{
+#if defined(_WIN32)
+  return ';';
+#else
+  return ':';
 #endif
 }

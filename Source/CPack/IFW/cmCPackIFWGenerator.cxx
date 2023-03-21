@@ -58,6 +58,17 @@ std::vector<std::string> cmCPackIFWGenerator::BuildRepogenCommand()
 
   ifwCmd.emplace_back(this->RepoGen);
 
+  if (!this->IsVersionLess("4.2")) {
+    if (!this->ArchiveFormat.empty()) {
+      ifwCmd.emplace_back("--archive-format");
+      ifwCmd.emplace_back(this->ArchiveFormat);
+    }
+    if (!this->ArchiveCompression.empty()) {
+      ifwCmd.emplace_back("--compression");
+      ifwCmd.emplace_back(this->ArchiveCompression);
+    }
+  }
+
   if (this->IsVersionLess("2.0.0")) {
     ifwCmd.emplace_back("-c");
     ifwCmd.emplace_back(this->toplevel + "/config/config.xml");
@@ -156,6 +167,28 @@ std::vector<std::string> cmCPackIFWGenerator::BuildBinaryCreatorCommmand()
   std::string ifwArg;
 
   ifwCmd.emplace_back(this->BinCreator);
+
+  if (!this->IsVersionLess("4.2")) {
+    if (!this->ArchiveFormat.empty()) {
+      ifwCmd.emplace_back("--archive-format");
+      ifwCmd.emplace_back(this->ArchiveFormat);
+    }
+    if (!this->ArchiveCompression.empty()) {
+      ifwCmd.emplace_back("--compression");
+      ifwCmd.emplace_back(this->ArchiveCompression);
+    }
+  }
+
+  if (!this->IsVersionLess("3.0")) {
+#ifdef __APPLE__
+    // macOS only
+    std::string signingIdentity = this->Installer.SigningIdentity;
+    if (!signingIdentity.empty()) {
+      ifwCmd.emplace_back("--sign");
+      ifwCmd.emplace_back(signingIdentity);
+    }
+#endif
+  }
 
   ifwCmd.emplace_back("-c");
   ifwCmd.emplace_back(this->toplevel + "/config/config.xml");
@@ -354,6 +387,14 @@ int cmCPackIFWGenerator::InitializeInternal()
     cmExpandList(dirs, this->RepoDirsVector);
   }
 
+  // Archive format and compression level
+  if (cmValue af = this->GetOption("CPACK_IFW_ARCHIVE_FORMAT")) {
+    this->ArchiveFormat = *af;
+  }
+  if (cmValue ac = this->GetOption("CPACK_IFW_ARCHIVE_COMPRESSION")) {
+    this->ArchiveCompression = *ac;
+  }
+
   // Installer
   this->Installer.Generator = this;
   this->Installer.ConfigureFromOptions();
@@ -427,7 +468,7 @@ std::string cmCPackIFWGenerator::GetComponentInstallDirNameSuffix(
   const std::string suffix = "/data";
 
   if (this->componentPackageMethod == this->ONE_PACKAGE) {
-    return std::string(prefix + this->GetRootPackageName() + suffix);
+    return cmStrCat(prefix, this->GetRootPackageName(), suffix);
   }
 
   return prefix +
@@ -544,7 +585,7 @@ std::string cmCPackIFWGenerator::GetRootPackageName()
     // Configure from root group
     cmCPackIFWPackage package;
     package.Generator = this;
-    package.ConfigureFromGroup(optIFW_PACKAGE_GROUP);
+    package.ConfigureFromGroup(*optIFW_PACKAGE_GROUP);
     name = package.Name;
   } else if (cmValue optIFW_PACKAGE_NAME =
                this->GetOption("CPACK_IFW_PACKAGE_NAME")) {

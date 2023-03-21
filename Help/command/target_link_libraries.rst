@@ -146,8 +146,10 @@ Libraries for a Target and/or its Dependents
                         <PRIVATE|PUBLIC|INTERFACE> <item>...
                        [<PRIVATE|PUBLIC|INTERFACE> <item>...]...)
 
-The ``PUBLIC``, ``PRIVATE`` and ``INTERFACE`` keywords can be used to
+The ``PUBLIC``, ``PRIVATE`` and ``INTERFACE``
+:ref:`scope <Target Usage Requirements>` keywords can be used to
 specify both the link dependencies and the link interface in one command.
+
 Libraries and targets following ``PUBLIC`` are linked to, and are made
 part of the link interface.  Libraries and targets following ``PRIVATE``
 are linked to, but are not made part of the link interface.  Libraries
@@ -291,8 +293,8 @@ will be included in the link too.
 
 .. _`Linking Object Libraries via $<TARGET_OBJECTS>`:
 
-Linking Object Libraries via $<TARGET_OBJECTS>
-""""""""""""""""""""""""""""""""""""""""""""""
+Linking Object Libraries via ``$<TARGET_OBJECTS>``
+""""""""""""""""""""""""""""""""""""""""""""""""""
 
 .. versionadded:: 3.21
 
@@ -405,3 +407,15 @@ Creating Relocatable Packages
 
 .. |INTERFACE_PROPERTY_LINK| replace:: :prop_tgt:`INTERFACE_LINK_LIBRARIES`
 .. include:: /include/INTERFACE_LINK_LIBRARIES_WARNING.txt
+
+See Also
+^^^^^^^^
+
+* :command:`target_compile_definitions`
+* :command:`target_compile_features`
+* :command:`target_compile_options`
+* :command:`target_include_directories`
+* :command:`target_link_directories`
+* :command:`target_link_options`
+* :command:`target_precompile_headers`
+* :command:`target_sources`

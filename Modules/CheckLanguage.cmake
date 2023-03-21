@@ -46,7 +46,7 @@ macro(check_language lang)
     file(REMOVE_RECURSE ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/Check${lang})
 
     set(extra_compiler_variables)
-    if(${lang} STREQUAL CUDA)
+    if(${lang} STREQUAL CUDA AND NOT CMAKE_GENERATOR MATCHES "Visual Studio")
       set(extra_compiler_variables "set(CMAKE_CUDA_HOST_COMPILER \\\"\${CMAKE_CUDA_HOST_COMPILER}\\\")")
     endif()
 
@@ -90,14 +90,14 @@ file(WRITE \"\${CMAKE_CURRENT_BINARY_DIR}/result.cmake\"
       )
     include(${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/Check${lang}/result.cmake OPTIONAL)
     if(CMAKE_${lang}_COMPILER AND "${_cl_result}" STREQUAL "0")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
+      message(CONFIGURE_LOG
         "${_desc} passed with the following output:\n"
         "${_cl_output}\n")
       set(_CHECK_COMPILER_STATUS CHECK_PASS)
     else()
       set(CMAKE_${lang}_COMPILER NOTFOUND)
       set(_CHECK_COMPILER_STATUS CHECK_FAIL)
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
+      message(CONFIGURE_LOG
         "${_desc} failed with the following output:\n"
         "${_cl_output}\n")
     endif()

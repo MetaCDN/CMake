@@ -44,7 +44,7 @@ else()
     set(CMAKE_${lang}_LINKER_WRAPPER_FLAG "-Xlinker" " ")
     set(CMAKE_${lang}_LINKER_WRAPPER_FLAG_SEP)
 
-    if(CMAKE_${lang}_COMPILER_TARGET)
+    if(CMAKE_${lang}_COMPILER_TARGET AND "${lang}" STREQUAL "CXX")
       if(CMAKE_${lang}_COMPILER_VERSION VERSION_LESS 3.4.0)
         list(APPEND CMAKE_${lang}_COMPILER_PREDEFINES_COMMAND "-target" "${CMAKE_${lang}_COMPILER_TARGET}")
       else()
@@ -114,6 +114,12 @@ else()
     endif()
     set(CMAKE_${lang}_COMPILE_OPTIONS_USE_PCH -Xclang -include-pch -Xclang <PCH_FILE> -Xclang -include -Xclang <PCH_HEADER>)
     set(CMAKE_${lang}_COMPILE_OPTIONS_CREATE_PCH -Xclang -emit-pch -Xclang -include -Xclang <PCH_HEADER> -x ${__pch_header_${lang}})
+
+    # '-fcolor-diagnostics' introduced since Clang 2.6
+    if(CMAKE_${lang}_COMPILER_VERSION VERSION_GREATER_EQUAL 2.6)
+      set(CMAKE_${lang}_COMPILE_OPTIONS_COLOR_DIAGNOSTICS "-fcolor-diagnostics")
+      set(CMAKE_${lang}_COMPILE_OPTIONS_COLOR_DIAGNOSTICS_OFF "-fno-color-diagnostics")
+    endif()
   endmacro()
 endif()
 
@@ -249,6 +255,7 @@ macro(__compiler_clang_cxx_standards lang)
         cxx_std_17
         cxx_std_20
         cxx_std_23
+        cxx_std_26
         )
       _record_compiler_features(${lang} "" CMAKE_${lang}_COMPILE_FEATURES)
     endmacro()

@@ -150,7 +150,9 @@ bool cmDependsFortran::Finalize(std::ostream& makeDepends,
                                 std::ostream& internalDepends)
 {
   // Prepare the module search process.
-  this->LocateModules();
+  if (!this->LocateModules()) {
+    return false;
+  }
 
   // Get the directory in which stamp files will be stored.
   const std::string& stamp_dir = this->TargetDirectory;
@@ -216,7 +218,7 @@ bool cmDependsFortran::Finalize(std::ostream& makeDepends,
   return true;
 }
 
-void cmDependsFortran::LocateModules()
+bool cmDependsFortran::LocateModules()
 {
   // Collect the set of modules provided and required by all sources.
   using ObjectInfoMap = cmDependsFortranInternals::ObjectInfoMap;
@@ -234,7 +236,7 @@ void cmDependsFortran::LocateModules()
 
   // Short-circuit for simple targets.
   if (this->Internal->TargetRequires.empty()) {
-    return;
+    return true;
   }
 
   // Match modules provided by this target to those it requires.
@@ -243,15 +245,19 @@ void cmDependsFortran::LocateModules()
   // Load information about other targets.
   cmMakefile* mf = this->LocalGenerator->GetMakefile();
   std::vector<std::string> infoFiles;
-  mf->GetDefExpandList("CMAKE_TARGET_LINKED_INFO_FILES", infoFiles);
+  mf->GetDefExpandList("CMAKE_Fortran_TARGET_LINKED_INFO_FILES", infoFiles);
   for (std::string const& i : infoFiles) {
     std::string targetDir = cmSystemTools::GetFilenamePath(i);
     std::string fname = targetDir + "/fortran.internal";
     cmsys::ifstream fin(fname.c_str());
-    if (fin) {
-      this->MatchRemoteModules(fin, targetDir);
+    if (!fin) {
+      cmSystemTools::Error(cmStrCat("-E cmake_depends failed to open ", fname,
+                                    " for module information"));
+      return false;
     }
+    this->MatchRemoteModules(fin, targetDir);
   }
+  return true;
 }
 
 void cmDependsFortran::MatchLocalModules()
@@ -478,7 +484,7 @@ bool cmDependsFortran::CopyModule(const std::vector<std::string>& args)
   // when the interface described in the module does not.
 
   std::string mod = args[2];
-  std::string stamp = args[3];
+  std::string const& stamp = args[3];
   std::string compilerId;
   if (args.size() >= 5) {
     compilerId = args[4];
@@ -659,7 +665,7 @@ bool cmDependsFortran::ModulesDiffer(const std::string& modFile,
         return true;
       }
     }
-  } else if (compilerId == "Intel") {
+  } else if (compilerId == "Intel" || compilerId == "IntelLLVM") {
     const char seq[2] = { '\n', '\0' };
     const int seqlen = 2;
 

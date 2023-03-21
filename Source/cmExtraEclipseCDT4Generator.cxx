@@ -67,7 +67,7 @@ cmExtraEclipseCDT4Generator::GetFactory()
 
   if (factory.GetSupportedGlobalGenerators().empty()) {
 // TODO: Verify if __CYGWIN__ should be checked.
-//#if defined(_WIN32) && !defined(__CYGWIN__)
+// #if defined(_WIN32) && !defined(__CYGWIN__)
 #if defined(_WIN32)
     factory.AddSupportedGlobalGenerator("NMake Makefiles");
     factory.AddSupportedGlobalGenerator("MinGW Makefiles");
@@ -737,7 +737,7 @@ void cmExtraEclipseCDT4Generator::CreateCProjectFile() const
     // exclude source directory from output search path
     // - only if not named the same as an output directory
     if (!cmSystemTools::FileIsDirectory(
-          std::string(this->HomeOutputDirectory + "/" + p))) {
+          cmStrCat(this->HomeOutputDirectory, '/', p))) {
       excludeFromOut += p + "/|";
     }
   }

@@ -2,8 +2,12 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmVisualStudioWCEPlatformParser.h"
 
+#include <algorithm>
+#include <cstring>
+#include <utility>
+
 #include "cmGlobalVisualStudioGenerator.h"
-#include "cmXMLParser.h"
+#include "cmSystemTools.h"
 
 int cmVisualStudioWCEPlatformParser::ParseVersion(const char* version)
 {
@@ -12,9 +16,9 @@ int cmVisualStudioWCEPlatformParser::ParseVersion(const char* version)
   const std::string vckey = registryBase + "\\Setup\\VC;ProductDir";
   const std::string vskey = registryBase + "\\Setup\\VS;ProductDir";
 
-  if (!cmSystemTools::ReadRegistryValue(vckey.c_str(), this->VcInstallDir,
+  if (!cmSystemTools::ReadRegistryValue(vckey, this->VcInstallDir,
                                         cmSystemTools::KeyWOW64_32) ||
-      !cmSystemTools::ReadRegistryValue(vskey.c_str(), this->VsInstallDir,
+      !cmSystemTools::ReadRegistryValue(vskey, this->VsInstallDir,
                                         cmSystemTools::KeyWOW64_32)) {
     return 0;
   }
@@ -40,13 +44,12 @@ std::string cmVisualStudioWCEPlatformParser::GetOSVersion() const
 
 const char* cmVisualStudioWCEPlatformParser::GetArchitectureFamily() const
 {
-  std::map<std::string, std::string>::const_iterator it =
-    this->Macros.find("ARCHFAM");
+  auto it = this->Macros.find("ARCHFAM");
   if (it != this->Macros.end()) {
     return it->second.c_str();
   }
 
-  return 0;
+  return nullptr;
 }
 
 void cmVisualStudioWCEPlatformParser::StartElement(const std::string& name,

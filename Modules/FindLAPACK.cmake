@@ -12,7 +12,7 @@ This module finds an installed Fortran library that implements the
 
 At least one of the ``C``, ``CXX``, or ``Fortran`` languages must be enabled.
 
-.. _`LAPACK linear-algebra interface`: http://www.netlib.org/lapack/
+.. _`LAPACK linear-algebra interface`: https://netlib.org/lapack/
 
 Input Variables
 ^^^^^^^^^^^^^^^
@@ -34,6 +34,13 @@ The following variables may be set to influence this module's behavior:
 
   if set ``pkg-config`` will be used to search for a LAPACK library first
   and if one is found that is preferred
+
+``BLA_PKGCONFIG_LAPACK``
+  .. versionadded:: 3.25
+
+  If set, the ``pkg-config`` method will look for this module name instead of
+  just ``lapack``.
+
 
 ``BLA_SIZEOF_INTEGER``
   .. versionadded:: 3.22
@@ -278,8 +285,11 @@ endif()
 
 # Search with pkg-config if specified
 if(BLA_PREFER_PKGCONFIG)
-  find_package(PkgConfig)
-  pkg_check_modules(PKGC_LAPACK lapack)
+  if(NOT BLA_PKGCONFIG_LAPACK)
+    set(BLA_PKGCONFIG_LAPACK "lapack")
+  endif()
+  find_package(PkgConfig QUIET)
+  pkg_check_modules(PKGC_LAPACK QUIET ${BLA_PKGCONFIG_LAPACK})
   if(PKGC_LAPACK_FOUND)
     set(LAPACK_FOUND TRUE)
     set(LAPACK_LIBRARIES "${PKGC_LAPACK_LINK_LIBRARIES}")
@@ -663,6 +673,10 @@ if(NOT LAPACK_NOT_FOUND_MESSAGE)
     elseif(_lapack_sizeof_integer EQUAL 4)
       string(APPEND _lapack_nvhpc_lib "_lp64")
     endif()
+    set(_lapack_nvhpc_flags)
+    if(";${CMAKE_C_COMPILER_ID};${CMAKE_CXX_COMPILER_ID};${CMAKE_Fortran_COMPILER_ID};" MATCHES ";(NVHPC|PGI);")
+      set(_lapack_nvhpc_flags "-fortranlibs")
+    endif()
 
     check_lapack_libraries(
       LAPACK_LIBRARIES
@@ -670,7 +684,7 @@ if(NOT LAPACK_NOT_FOUND_MESSAGE)
       cheev
       ""
       "${_lapack_nvhpc_lib}"
-      "-fortranlibs"
+      "${_lapack_nvhpc_flags}"
       ""
       ""
       "${BLAS_LIBRARIES}"
@@ -688,7 +702,7 @@ if(NOT LAPACK_NOT_FOUND_MESSAGE)
         cheev
         ""
         "${_lapack_nvhpc_lib}"
-        "-fortranlibs"
+        "${_lapack_nvhpc_flags}"
         ""
         ""
         "${BLAS_LIBRARIES}"
@@ -696,6 +710,7 @@ if(NOT LAPACK_NOT_FOUND_MESSAGE)
     endif()
 
     unset(_lapack_nvhpc_lib)
+    unset(_lapack_nvhpc_flags)
   endif()
 
   # Generic LAPACK library?

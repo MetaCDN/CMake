@@ -208,8 +208,11 @@ same as the Google Test name (i.e. ``suite.testcase``); see also
   ``TEST_FILTER expr``
     .. versionadded:: 3.22
 
-    Filter expression to pass to ``--gtest_filter`` argument during test
-    discovery.
+    Filter expression to pass as a ``--gtest_filter`` argument during test
+    discovery.  Note that the expression is a wildcard-based format that
+    matches against the original test names as used by gtest.  For type or
+    value-parameterized tests, these names may be different to the potentially
+    pretty-printed test names that :program:`ctest` uses.
 
   ``NO_PRETTY_TYPES``
     By default, the type index of type-parameterized tests is replaced by the
@@ -345,7 +348,7 @@ function(gtest_add_tests)
   unset(testList)
 
   set(gtest_case_name_regex ".*\\( *([A-Za-z_0-9]+) *, *([A-Za-z_0-9]+) *\\).*")
-  set(gtest_test_type_regex "(TYPED_TEST|TEST_?[FP]?)")
+  set(gtest_test_type_regex "(TYPED_TEST|TEST)_?[FP]?")
 
   foreach(source IN LISTS ARGS_SOURCES)
     if(NOT ARGS_SKIP_DEPENDENCY)
@@ -358,7 +361,9 @@ function(gtest_add_tests)
 
       # Parameterized tests have a different signature for the filter
       if("x${test_type}" STREQUAL "xTEST_P")
-        string(REGEX REPLACE ${gtest_case_name_regex}  "*/\\1.\\2/*" gtest_test_name ${hit})
+        string(REGEX REPLACE ${gtest_case_name_regex} "*/\\1.\\2/*" gtest_test_name ${hit})
+      elseif("x${test_type}" STREQUAL "xTYPED_TEST_P")
+        string(REGEX REPLACE ${gtest_case_name_regex} "*/\\1/*.\\2" gtest_test_name ${hit})
       elseif("x${test_type}" STREQUAL "xTEST_F" OR "x${test_type}" STREQUAL "xTEST")
         string(REGEX REPLACE ${gtest_case_name_regex} "\\1.\\2" gtest_test_name ${hit})
       elseif("x${test_type}" STREQUAL "xTYPED_TEST")
@@ -399,6 +404,12 @@ function(gtest_add_tests)
                  COMMAND ${ARGS_TARGET}
                    --gtest_filter=${gtest_test_name}
                    ${ARGS_EXTRA_ARGS}
+        )
+        # Makes sure a skipped GTest is reported as so by CTest
+        set_tests_properties(
+          ${ctest_test_name}
+          PROPERTIES
+          SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]"
         )
         list(APPEND testList ${ctest_test_name})
       endif()
@@ -513,7 +524,8 @@ function(gtest_discover_tests TARGET)
     string(CONCAT ctest_include_content
       "if(EXISTS \"$<TARGET_FILE:${TARGET}>\")"                                    "\n"
       "  if(NOT EXISTS \"${ctest_tests_file}\" OR"                                 "\n"
-      "     NOT \"${ctest_tests_file}\" IS_NEWER_THAN \"$<TARGET_FILE:${TARGET}>\")" "\n"
+      "     NOT \"${ctest_tests_file}\" IS_NEWER_THAN \"$<TARGET_FILE:${TARGET}>\" OR\n"
+      "     NOT \"${ctest_tests_file}\" IS_NEWER_THAN \"\${CMAKE_CURRENT_LIST_FILE}\")\n"
       "    include(\"${_GOOGLETEST_DISCOVER_TESTS_SCRIPT}\")"                      "\n"
       "    gtest_discover_tests_impl("                                             "\n"
       "      TEST_EXECUTABLE"        " [==[" "$<TARGET_FILE:${TARGET}>"   "]==]"   "\n"

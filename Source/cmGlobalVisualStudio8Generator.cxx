@@ -2,21 +2,40 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudio8Generator.h"
 
+#include <algorithm>
+#include <functional>
+#include <ostream>
+#include <utility>
+
 #include <cm/memory>
+#include <cmext/algorithm>
 #include <cmext/memory>
 
 #include "cmCustomCommand.h"
 #include "cmCustomCommandLines.h"
-#include "cmDocumentationEntry.h"
+#include "cmCustomCommandTypes.h"
 #include "cmGeneratedFileStream.h"
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorTarget.h"
+#include "cmGlobalGenerator.h"
+#include "cmGlobalVisualStudio7Generator.h"
+#include "cmGlobalVisualStudioGenerator.h"
+#include "cmListFileCache.h"
+#include "cmLocalGenerator.h"
 #include "cmLocalVisualStudio7Generator.h"
 #include "cmMakefile.h"
-#include "cmMessageType.h"
+#include "cmPolicies.h"
 #include "cmSourceFile.h"
-#include "cmVisualStudioWCEPlatformParser.h"
+#include "cmStateTypes.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
+#include "cmTarget.h"
+#include "cmTargetDepend.h"
+#include "cmValue.h"
+#include "cmVisualStudioGeneratorOptions.h"
 #include "cmake.h"
+
+struct cmIDEFlagTable;
 
 cmGlobalVisualStudio8Generator::cmGlobalVisualStudio8Generator(
   cmake* cm, const std::string& name,
@@ -25,7 +44,8 @@ cmGlobalVisualStudio8Generator::cmGlobalVisualStudio8Generator(
 {
   this->ProjectConfigurationSectionName = "ProjectConfigurationPlatforms";
   this->Name = name;
-  this->ExtraFlagTable = this->GetExtraFlagTableVS8();
+  this->ExtraFlagTable =
+    cmGlobalVisualStudio8Generator::GetExtraFlagTableVS8();
 }
 
 std::string cmGlobalVisualStudio8Generator::FindDevEnvCommand()
@@ -33,9 +53,9 @@ std::string cmGlobalVisualStudio8Generator::FindDevEnvCommand()
   // First look for VCExpress.
   std::string vsxcmd;
   std::string vsxkey =
-    cmStrCat("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VCExpress\\",
+    cmStrCat(R"(HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VCExpress\)",
              this->GetIDEVersion(), ";InstallDir");
-  if (cmSystemTools::ReadRegistryValue(vsxkey.c_str(), vsxcmd,
+  if (cmSystemTools::ReadRegistryValue(vsxkey, vsxcmd,
                                        cmSystemTools::KeyWOW64_32)) {
     cmSystemTools::ConvertToUnixSlashes(vsxcmd);
     vsxcmd += "/VCExpress.exe";
@@ -67,12 +87,55 @@ void cmGlobalVisualStudio8Generator::AddPlatformDefinitions(cmMakefile* mf)
 bool cmGlobalVisualStudio8Generator::SetGeneratorPlatform(std::string const& p,
                                                           cmMakefile* mf)
 {
-  if (!this->PlatformInGeneratorName) {
-    this->GeneratorPlatform = p;
-    return this->cmGlobalVisualStudio7Generator::SetGeneratorPlatform("", mf);
-  } else {
+  if (this->PlatformInGeneratorName) {
+    // This is an old-style generator name that contains the platform name.
+    // No explicit platform specification is supported, so pass it through
+    // to our base class implementation, which errors on non-empty platforms.
     return this->cmGlobalVisualStudio7Generator::SetGeneratorPlatform(p, mf);
   }
+
+  this->GeneratorPlatform = p;
+
+  // FIXME: Add CMAKE_GENERATOR_PLATFORM field to set the framework.
+  // For now, just report the generator's default, if any.
+  if (cm::optional<std::string> const& targetFrameworkVersion =
+        this->GetTargetFrameworkVersion()) {
+    mf->AddDefinition("CMAKE_VS_TARGET_FRAMEWORK_VERSION",
+                      *targetFrameworkVersion);
+  }
+  if (cm::optional<std::string> const& targetFrameworkIdentifier =
+        this->GetTargetFrameworkIdentifier()) {
+    mf->AddDefinition("CMAKE_VS_TARGET_FRAMEWORK_IDENTIFIER",
+                      *targetFrameworkIdentifier);
+  }
+  if (cm::optional<std::string> const& targetFrameworkTargetsVersion =
+        this->GetTargetFrameworkTargetsVersion()) {
+    mf->AddDefinition("CMAKE_VS_TARGET_FRAMEWORK_TARGETS_VERSION",
+                      *targetFrameworkTargetsVersion);
+  }
+
+  // The generator name does not contain the platform name, and so supports
+  // explicit platform specification.  We handled that above, so pass an
+  // empty platform name to our base class implementation so it does not error.
+  return this->cmGlobalVisualStudio7Generator::SetGeneratorPlatform("", mf);
+}
+
+cm::optional<std::string> const&
+cmGlobalVisualStudio8Generator::GetTargetFrameworkVersion() const
+{
+  return this->DefaultTargetFrameworkVersion;
+}
+
+cm::optional<std::string> const&
+cmGlobalVisualStudio8Generator::GetTargetFrameworkIdentifier() const
+{
+  return this->DefaultTargetFrameworkIdentifier;
+}
+
+cm::optional<std::string> const&
+cmGlobalVisualStudio8Generator::GetTargetFrameworkTargetsVersion() const
+{
+  return this->DefaultTargetFrameworkTargetsVersion;
 }
 
 std::string cmGlobalVisualStudio8Generator::GetGenerateStampList()
@@ -87,6 +150,7 @@ void cmGlobalVisualStudio8Generator::Configure()
 
 bool cmGlobalVisualStudio8Generator::UseFolderProperty() const
 {
+  // NOLINTNEXTLINE(bugprone-parent-virtual-call)
   return IsExpressEdition() ? false : cmGlobalGenerator::UseFolderProperty();
 }
 
@@ -104,16 +168,13 @@ bool cmGlobalVisualStudio8Generator::AddCheckTarget()
   auto& lg =
     cm::static_reference_cast<cmLocalVisualStudio7Generator>(generators[0]);
 
-  const char* no_working_directory = nullptr;
-  std::vector<std::string> no_byproducts;
-  std::vector<std::string> no_depends;
-  cmCustomCommandLines no_commands;
-  cmTarget* tgt = lg.AddUtilityCommand(
-    CMAKE_CHECK_BUILD_SYSTEM_TARGET, false, no_working_directory,
-    no_byproducts, no_depends, no_commands, cmPolicies::NEW);
+  auto cc = cm::make_unique<cmCustomCommand>();
+  cc->SetCMP0116Status(cmPolicies::NEW);
+  cmTarget* tgt = lg.AddUtilityCommand(CMAKE_CHECK_BUILD_SYSTEM_TARGET, false,
+                                       std::move(cc));
 
   auto ptr = cm::make_unique<cmGeneratorTarget>(tgt, &lg);
-  auto gt = ptr.get();
+  auto* gt = ptr.get();
   lg.AddGeneratorTarget(std::move(ptr));
 
   // Organize in the "predefined targets" folder:
@@ -131,7 +192,7 @@ bool cmGlobalVisualStudio8Generator::AddCheckTarget()
       cmStrCat(generators[0]->GetMakefile()->GetCurrentBinaryDirectory(), '/',
                stampList);
     std::string stampFile;
-    cmGeneratedFileStream fout(stampListFile.c_str());
+    cmGeneratedFileStream fout(stampListFile);
     for (const auto& gi : generators) {
       stampFile = cmStrCat(gi->GetMakefile()->GetCurrentBinaryDirectory(),
                            "/CMakeFiles/generate.stamp");
@@ -160,11 +221,15 @@ bool cmGlobalVisualStudio8Generator::AddCheckTarget()
       std::vector<std::string> byproducts;
       byproducts.push_back(cm->GetGlobVerifyStamp());
 
-      lg.AddCustomCommandToTarget(CMAKE_CHECK_BUILD_SYSTEM_TARGET, byproducts,
-                                  no_depends, verifyCommandLines,
+      cc = cm::make_unique<cmCustomCommand>();
+      cc->SetByproducts(byproducts);
+      cc->SetCommandLines(verifyCommandLines);
+      cc->SetComment("Checking File Globs");
+      cc->SetCMP0116Status(cmPolicies::NEW);
+      cc->SetStdPipesUTF8(stdPipesUTF8);
+      lg.AddCustomCommandToTarget(CMAKE_CHECK_BUILD_SYSTEM_TARGET,
                                   cmCustomCommandType::PRE_BUILD,
-                                  "Checking File Globs", no_working_directory,
-                                  cmPolicies::NEW, stdPipesUTF8);
+                                  std::move(cc));
 
       // Ensure ZERO_CHECK always runs in Visual Studio using MSBuild,
       // otherwise the prebuild command will not be run.
@@ -174,8 +239,7 @@ bool cmGlobalVisualStudio8Generator::AddCheckTarget()
 
     // Sort the list of input files and remove duplicates.
     std::sort(listFiles.begin(), listFiles.end(), std::less<std::string>());
-    std::vector<std::string>::iterator new_end =
-      std::unique(listFiles.begin(), listFiles.end());
+    auto new_end = std::unique(listFiles.begin(), listFiles.end());
     listFiles.erase(new_end, listFiles.end());
 
     // Create a rule to re-run CMake.
@@ -191,13 +255,16 @@ bool cmGlobalVisualStudio8Generator::AddCheckTarget()
     // file as the main dependency because it would get
     // overwritten by the CreateVCProjBuildRule.
     // (this could be avoided with per-target source files)
-    std::string no_main_dependency;
-    cmImplicitDependsList no_implicit_depends;
-    if (cmSourceFile* file = lg.AddCustomCommandToOutput(
-          stamps, no_byproducts, listFiles, no_main_dependency,
-          no_implicit_depends, commandLines, "Checking Build System",
-          no_working_directory, cmPolicies::NEW, true, false, false, false, "",
-          "", stdPipesUTF8)) {
+    cc = cm::make_unique<cmCustomCommand>();
+    cc->SetOutputs(stamps);
+    cc->SetDepends(listFiles);
+    cc->SetCommandLines(commandLines);
+    cc->SetComment("Checking Build System");
+    cc->SetCMP0116Status(cmPolicies::NEW);
+    cc->SetEscapeOldStyle(false);
+    cc->SetStdPipesUTF8(stdPipesUTF8);
+    if (cmSourceFile* file =
+          lg.AddCustomCommandToOutput(std::move(cc), true)) {
       gt->AddSource(file->ResolveFullPath());
     } else {
       cmSystemTools::Error("Error adding rule for " + stamps[0]);
@@ -211,8 +278,8 @@ void cmGlobalVisualStudio8Generator::AddExtraIDETargets()
 {
   cmGlobalVisualStudio7Generator::AddExtraIDETargets();
   if (this->AddCheckTarget()) {
-    for (unsigned int i = 0; i < this->LocalGenerators.size(); ++i) {
-      const auto& tgts = this->LocalGenerators[i]->GetGeneratorTargets();
+    for (auto& LocalGenerator : this->LocalGenerators) {
+      const auto& tgts = LocalGenerator->GetGeneratorTargets();
       // All targets depend on the build-system check target.
       for (const auto& ti : tgts) {
         if (ti->GetName() != CMAKE_CHECK_BUILD_SYSTEM_TARGET) {
@@ -258,8 +325,7 @@ void cmGlobalVisualStudio8Generator::WriteProjectConfigurations(
          << (!platformMapping.empty() ? platformMapping
                                       : this->GetPlatformName())
          << "\n";
-    std::set<std::string>::const_iterator ci =
-      configsPartOfDefaultBuild.find(i);
+    auto ci = configsPartOfDefaultBuild.find(i);
     if (!(ci == configsPartOfDefaultBuild.end())) {
       fout << "\t\t{" << guid << "}." << i << "|" << this->GetPlatformName()
            << ".Build.0 = " << dstConfig << "|"
@@ -316,6 +382,7 @@ bool cmGlobalVisualStudio8Generator::ComputeTargetDepends()
 {
   // Skip over the cmGlobalVisualStudioGenerator implementation!
   // We do not need the support that VS <= 7.1 needs.
+  // NOLINTNEXTLINE(bugprone-parent-virtual-call)
   return this->cmGlobalGenerator::ComputeTargetDepends();
 }
 
@@ -326,7 +393,7 @@ void cmGlobalVisualStudio8Generator::WriteProjectDepends(
   TargetDependSet const& unordered = this->GetTargetDirectDepends(gt);
   OrderedTargetDependSet depends(unordered, std::string());
   for (cmTargetDepend const& i : depends) {
-    if (!i->IsInBuildSystem()) {
+    if (!this->IsInSolution(i)) {
       continue;
     }
     std::string guid = this->GetGUID(i->GetName());
@@ -338,20 +405,23 @@ bool cmGlobalVisualStudio8Generator::NeedLinkLibraryDependencies(
   cmGeneratorTarget* target)
 {
   // Look for utility dependencies that magically link.
-  for (BT<std::pair<std::string, bool>> const& ui : target->GetUtilities()) {
-    if (cmGeneratorTarget* depTarget =
-          target->GetLocalGenerator()->FindGeneratorTargetToUse(
-            ui.Value.first)) {
-      if (depTarget->IsInBuildSystem() &&
-          depTarget->GetProperty("EXTERNAL_MSPROJECT")) {
-        // This utility dependency names an external .vcproj target.
-        // We use LinkLibraryDependencies="true" to link to it without
-        // predicting the .lib file location or name.
-        return true;
+  auto const& utilities = target->GetUtilities();
+  return std::any_of(
+    utilities.begin(), utilities.end(),
+    [target](BT<std::pair<std::string, bool>> const& ui) {
+      if (cmGeneratorTarget* depTarget =
+            target->GetLocalGenerator()->FindGeneratorTargetToUse(
+              ui.Value.first)) {
+        if (depTarget->IsInBuildSystem() &&
+            depTarget->GetProperty("EXTERNAL_MSPROJECT")) {
+          // This utility dependency names an external .vcproj target.
+          // We use LinkLibraryDependencies="true" to link to it without
+          // predicting the .lib file location or name.
+          return true;
+        }
       }
-    }
-  }
-  return false;
+      return false;
+    });
 }
 
 static cmVS7FlagTable cmVS8ExtraFlagTable[] = {

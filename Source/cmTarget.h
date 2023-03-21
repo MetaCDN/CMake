@@ -5,14 +5,17 @@
 #include "cmConfigure.h" // IWYU pragma: keep
 
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <cm/optional>
+
 #include "cmAlgorithms.h"
-#include "cmListFileCache.h"
+#include "cmFileSet.h"
 #include "cmPolicies.h"
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
@@ -22,11 +25,18 @@
 class cmCustomCommand;
 class cmGlobalGenerator;
 class cmInstallTargetGenerator;
+class cmListFileBacktrace;
+class cmListFileContext;
 class cmMakefile;
-class cmMessenger;
 class cmPropertyMap;
 class cmSourceFile;
+class cmTargetExport;
 class cmTargetInternals;
+
+template <typename T>
+class BT;
+template <typename T>
+class BTs;
 
 /** \class cmTarget
  * \brief Represent a library or executable target loaded from a makefile.
@@ -175,16 +185,17 @@ public:
   {
     this->SetProperty(prop, cmValue(value));
   }
-  void AppendProperty(const std::string& prop, const std::string& value,
-                      bool asString = false);
+  void AppendProperty(
+    const std::string& prop, const std::string& value,
+    cm::optional<cmListFileBacktrace> const& bt = cm::nullopt,
+    bool asString = false);
   //! Might return a nullptr if the property is not set or invalid
   cmValue GetProperty(const std::string& prop) const;
   //! Always returns a valid pointer
   std::string const& GetSafeProperty(std::string const& prop) const;
   bool GetPropertyAsBool(const std::string& prop) const;
   void CheckProperty(const std::string& prop, cmMakefile* context) const;
-  cmValue GetComputedProperty(const std::string& prop, cmMessenger* messenger,
-                              cmListFileBacktrace const& context) const;
+  cmValue GetComputedProperty(const std::string& prop, cmMakefile& mf) const;
   //! Get all properties
   cmPropertyMap const& GetProperties() const;
 
@@ -214,6 +225,8 @@ public:
   //! Return whether this target is a GUI executable on Android.
   bool IsAndroidGuiExecutable() const;
 
+  bool HasKnownObjectFileLocation(std::string* reason = nullptr) const;
+
   //! Get a backtrace from the creation of the target.
   cmListFileBacktrace const& GetBacktrace() const;
 
@@ -225,6 +238,9 @@ public:
   void InsertPrecompileHeader(BT<std::string> const& entry);
 
   void AppendBuildInterfaceIncludes();
+  void FinalizeTargetConfiguration(
+    const cmBTStringRange& noConfigCompileDefinitions,
+    cm::optional<std::map<std::string, cmValue>>& perConfigCompileDefinitions);
 
   std::string GetDebugGeneratorExpressions(const std::string& value,
                                            cmTargetLinkLibraryType llt) const;
@@ -232,8 +248,10 @@ public:
   void AddSystemIncludeDirectories(std::set<std::string> const& incs);
   std::set<std::string> const& GetSystemIncludeDirectories() const;
 
-  void AddInstallIncludeDirectories(cmStringRange const& incs);
-  cmStringRange GetInstallIncludeDirectoriesEntries() const;
+  void AddInstallIncludeDirectories(cmTargetExport const& te,
+                                    cmStringRange const& incs);
+  cmStringRange GetInstallIncludeDirectoriesEntries(
+    cmTargetExport const& te) const;
 
   BTs<std::string> const* GetLanguageStandardProperty(
     const std::string& propertyName) const;
@@ -260,6 +278,18 @@ public:
 
   cmBTStringRange GetLinkImplementationEntries() const;
 
+  cmBTStringRange GetLinkInterfaceEntries() const;
+  cmBTStringRange GetLinkInterfaceDirectEntries() const;
+  cmBTStringRange GetLinkInterfaceDirectExcludeEntries() const;
+
+  cmBTStringRange GetHeaderSetsEntries() const;
+  cmBTStringRange GetCxxModuleSetsEntries() const;
+  cmBTStringRange GetCxxModuleHeaderSetsEntries() const;
+
+  cmBTStringRange GetInterfaceHeaderSetsEntries() const;
+  cmBTStringRange GetInterfaceCxxModuleSetsEntries() const;
+  cmBTStringRange GetInterfaceCxxModuleHeaderSetsEntries() const;
+
   std::string ImportedGetFullPath(const std::string& config,
                                   cmStateEnums::ArtifactType artifact) const;
 
@@ -267,6 +297,18 @@ public:
   {
     bool operator()(cmTarget const* t1, cmTarget const* t2) const;
   };
+
+  const cmFileSet* GetFileSet(const std::string& name) const;
+  cmFileSet* GetFileSet(const std::string& name);
+  std::pair<cmFileSet*, bool> GetOrCreateFileSet(const std::string& name,
+                                                 const std::string& type,
+                                                 cmFileSetVisibility vis);
+
+  std::vector<std::string> GetAllFileSetNames() const;
+  std::vector<std::string> GetAllInterfaceFileSets() const;
+
+  static std::string GetFileSetsPropertyName(const std::string& type);
+  static std::string GetInterfaceFileSetsPropertyName(const std::string& type);
 
 private:
   template <typename ValueType>

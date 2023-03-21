@@ -5,10 +5,12 @@
     "projectName": "Cxx",
     "type": "EXECUTABLE",
     "isGeneratorProvided": null,
+    "fileSets": null,
     "sources": [
         {
             "path": "^empty\\.cxx$",
             "isGenerated": null,
+            "fileSetName": null,
             "sourceGroupName": "Source Files",
             "compileGroupLanguage": "CXX",
             "backtrace": [
@@ -136,7 +138,7 @@
                 "backtrace": [
                     {
                         "file": "^codemodel-v2\\.cmake$",
-                        "line": 38,
+                        "line": 42,
                         "command": "install",
                         "hasParent": true
                     },

@@ -42,6 +42,8 @@ The options are:
   Each byproduct file will be marked with the :prop_sf:`GENERATED`
   source file property automatically.
 
+  *See policy* :policy:`CMP0058` *for the motivation behind this feature.*
+
   Explicit specification of byproducts is supported by the
   :generator:`Ninja` generator to tell the ``ninja`` build tool
   how to regenerate byproducts when they are missing.  It is
@@ -106,6 +108,10 @@ The options are:
 ``COMMENT``
   Display the given message before the commands are executed at
   build time.
+
+  .. versionadded:: 3.26
+    Arguments to ``COMMENT`` may use
+    :manual:`generator expressions <cmake-generator-expressions(7)>`.
 
 ``DEPENDS``
   Reference files and outputs of custom commands created with
@@ -179,3 +185,8 @@ Ninja Multi-Config
   ``add_custom_target`` supports the :generator:`Ninja Multi-Config`
   generator's cross-config capabilities. See the generator documentation
   for more information.
+
+See Also
+^^^^^^^^
+
+* :command:`add_custom_command`

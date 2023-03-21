@@ -1,8 +1,10 @@
-foreach(arg
+foreach(
+  arg
+  IN ITEMS
     RunCMake_GENERATOR
     RunCMake_SOURCE_DIR
     RunCMake_BINARY_DIR
-    )
+  )
   if(NOT DEFINED ${arg})
     message(FATAL_ERROR "${arg} not given!")
   endif()
@@ -31,18 +33,18 @@ function(run_cmake test)
     set(platform_name msys)
   endif()
 
-  foreach(o out err)
-    if(RunCMake-std${o}-file AND EXISTS ${top_src}/${RunCMake-std${o}-file})
-      file(READ ${top_src}/${RunCMake-std${o}-file} expect_std${o})
-      string(REGEX REPLACE "\n+$" "" expect_std${o} "${expect_std${o}}")
-    elseif(EXISTS ${top_src}/${test}-std${o}-${platform_name}.txt)
-      file(READ ${top_src}/${test}-std${o}-${platform_name}.txt expect_std${o})
-      string(REGEX REPLACE "\n+$" "" expect_std${o} "${expect_std${o}}")
-    elseif(EXISTS ${top_src}/${test}-std${o}.txt)
-      file(READ ${top_src}/${test}-std${o}.txt expect_std${o})
-      string(REGEX REPLACE "\n+$" "" expect_std${o} "${expect_std${o}}")
+  foreach(o IN ITEMS stdout stderr config)
+    if(RunCMake-${o}-file AND EXISTS ${top_src}/${RunCMake-${o}-file})
+      file(READ ${top_src}/${RunCMake-${o}-file} expect_${o})
+      string(REGEX REPLACE "\n+$" "" expect_${o} "${expect_${o}}")
+    elseif(EXISTS ${top_src}/${test}-${o}-${platform_name}.txt)
+      file(READ ${top_src}/${test}-${o}-${platform_name}.txt expect_${o})
+      string(REGEX REPLACE "\n+$" "" expect_${o} "${expect_${o}}")
+    elseif(EXISTS ${top_src}/${test}-${o}.txt)
+      file(READ ${top_src}/${test}-${o}.txt expect_${o})
+      string(REGEX REPLACE "\n+$" "" expect_${o} "${expect_${o}}")
     else()
-      unset(expect_std${o})
+      unset(expect_${o})
     endif()
   endforeach()
   if (NOT expect_stderr)
@@ -92,6 +94,9 @@ function(run_cmake test)
     if(APPLE)
       list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0025=NEW)
     endif()
+    if(NOT RunCMake_TEST_NO_CMP0129 AND CMAKE_C_COMPILER_ID STREQUAL "LCC")
+      list(APPEND RunCMake_TEST_OPTIONS -DCMAKE_POLICY_DEFAULT_CMP0129=NEW)
+    endif()
     if(RunCMake_MAKE_PROGRAM)
       list(APPEND RunCMake_TEST_OPTIONS "-DCMAKE_MAKE_PROGRAM=${RunCMake_MAKE_PROGRAM}")
     endif()
@@ -116,12 +121,16 @@ function(run_cmake test)
   else()
     set(RunCMake_TEST_OPTIONS "")
   endif()
+  if(NOT DEFINED RunCMake_TEST_RAW_ARGS)
+    set(RunCMake_TEST_RAW_ARGS "")
+  endif()
   if(NOT RunCMake_TEST_COMMAND_WORKING_DIRECTORY)
     set(RunCMake_TEST_COMMAND_WORKING_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
   endif()
-  execute_process(
+  string(CONCAT _code [[execute_process(
     COMMAND ${RunCMake_TEST_COMMAND}
             ${RunCMake_TEST_OPTIONS}
+            ]] "${RunCMake_TEST_RAW_ARGS}\n" [[
     WORKING_DIRECTORY "${RunCMake_TEST_COMMAND_WORKING_DIRECTORY}"
     OUTPUT_VARIABLE actual_stdout
     ERROR_VARIABLE ${actual_stderr_var}
@@ -129,10 +138,17 @@ function(run_cmake test)
     ENCODING UTF8
     ${maybe_timeout}
     ${maybe_input_file}
-    )
+    )]])
+  cmake_language(EVAL CODE "${_code}")
   set(msg "")
   if(NOT "${actual_result}" MATCHES "${expect_result}")
     string(APPEND msg "Result is [${actual_result}], not [${expect_result}].\n")
+  endif()
+  set(config_file "${RunCMake_TEST_COMMAND_WORKING_DIRECTORY}/CMakeFiles/CMakeConfigureLog.yaml")
+  if(EXISTS "${config_file}")
+    file(READ "${config_file}" actual_config)
+  else()
+    set(actual_config "")
   endif()
 
   # Special case: remove ninja no-op line from stderr, but not stdout.
@@ -145,6 +161,8 @@ function(run_cmake test)
     "|BullseyeCoverage"
     "|[a-z]+\\([0-9]+\\) malloc:"
     "|clang[^:]*: warning: the object size sanitizer has no effect at -O0, but is explicitly enabled:"
+    "|icp?x: remark: Note that use of .-g. without any optimization-level option will turn off most compiler optimizations"
+    "|lld-link: warning: procedure symbol record for .* refers to PDB item index [0-9A-Fa-fx]+ which is not a valid function ID record"
     "|Error kstat returned"
     "|Hit xcodebuild bug"
     "|Recompacting log\\.\\.\\."
@@ -153,28 +171,28 @@ function(run_cmake test)
     "|Your license to use PGI[^\n]*expired"
     "|Please obtain a new version at"
     "|contact PGI Sales at"
+    "|icp?c: remark #10441: The Intel\\(R\\) C\\+\\+ Compiler Classic \\(ICC\\) is deprecated"
 
     "|[^\n]*install_name_tool: warning: changes being made to the file will invalidate the code signature in:"
     "|[^\n]*xcodebuild[^\n]*DVTPlugInManager"
+    "|[^\n]*xcodebuild[^\n]*DVTSDK: Warning: SDK path collision for path"
+    "|[^\n]*xcodebuild[^\n]*Requested but did not find extension point with identifier"
+    "|[^\n]*xcodebuild[^\n]*nil host used in call to allows.*HTTPSCertificateForHost"
     "|[^\n]*xcodebuild[^\n]*warning: file type[^\n]*is based on missing file type"
-    "|[^\n]*objc[^\n]*: Class AMSupportURL[^\n]* One of the two will be used. Which one is undefined."
+    "|[^\n]*objc[^\n]*: Class [^\n]* One of the two will be used. Which one is undefined."
     "|[^\n]*is a member of multiple groups"
     "|[^\n]*offset in archive not a multiple of 8"
     "|[^\n]*from Time Machine by path"
     "|[^\n]*Bullseye Testing Technology"
     ")[^\n]*\n)+"
     )
-  foreach(o out err)
-    string(REGEX REPLACE "\r\n" "\n" actual_std${o} "${actual_std${o}}")
-    string(REGEX REPLACE "${ignore_line_regex}" "\\1" actual_std${o} "${actual_std${o}}")
-    string(REGEX REPLACE "\n+$" "" actual_std${o} "${actual_std${o}}")
-    set(expect_${o} "")
-    if(DEFINED expect_std${o})
-      if(NOT "${actual_std${o}}" MATCHES "${expect_std${o}}")
-        string(REGEX REPLACE "\n" "\n expect-${o}> " expect_${o}
-          " expect-${o}> ${expect_std${o}}")
-        set(expect_${o} "Expected std${o} to match:\n${expect_${o}}\n")
-        string(APPEND msg "std${o} does not match that expected.\n")
+  foreach(o IN ITEMS stdout stderr config)
+    string(REGEX REPLACE "\r\n" "\n" actual_${o} "${actual_${o}}")
+    string(REGEX REPLACE "${ignore_line_regex}" "\\1" actual_${o} "${actual_${o}}")
+    string(REGEX REPLACE "\n+$" "" actual_${o} "${actual_${o}}")
+    if(DEFINED expect_${o})
+      if(NOT "${actual_${o}}" MATCHES "${expect_${o}}")
+        string(APPEND msg "${o} does not match that expected.\n")
       endif()
     endif()
   endforeach()
@@ -193,18 +211,23 @@ function(run_cmake test)
       string(REPLACE ";" "\" \"" options "\"${RunCMake_TEST_OPTIONS}\"")
       string(APPEND command " ${options}")
     endif()
+    if(RunCMake_TEST_RAW_ARGS)
+      string(APPEND command " ${RunCMake_TEST_RAW_ARGS}")
+    endif()
     string(APPEND msg "Command was:\n command> ${command}\n")
   endif()
   if(msg)
-    string(REGEX REPLACE "\n" "\n actual-out> " actual_out " actual-out> ${actual_stdout}")
-    string(REGEX REPLACE "\n" "\n actual-err> " actual_err " actual-err> ${actual_stderr}")
-    message(SEND_ERROR "${test}${RunCMake_TEST_VARIANT_DESCRIPTION} - FAILED:\n"
-      "${msg}"
-      "${expect_out}"
-      "Actual stdout:\n${actual_out}\n"
-      "${expect_err}"
-      "Actual stderr:\n${actual_err}\n"
-      )
+    foreach(o IN ITEMS stdout stderr config)
+      if(DEFINED expect_${o})
+        string(REGEX REPLACE "\n" "\n expect-${o}> " expect_${o} " expect-${o}> ${expect_${o}}")
+        string(APPEND msg "Expected ${o} to match:\n${expect_${o}}\n")
+      endif()
+      if(NOT o STREQUAL "config" OR DEFINED expect_${o})
+        string(REGEX REPLACE "\n" "\n actual-${o}> " actual_${o} " actual-${o}> ${actual_${o}}")
+        string(APPEND msg "Actual ${o}:\n${actual_${o}}\n")
+      endif()
+    endforeach()
+    message(SEND_ERROR "${test}${RunCMake_TEST_VARIANT_DESCRIPTION} - FAILED:\n${msg}")
   else()
     message(STATUS "${test}${RunCMake_TEST_VARIANT_DESCRIPTION} - PASSED")
   endif()
@@ -222,6 +245,11 @@ endfunction()
 
 function(run_cmake_with_options test)
   set(RunCMake_TEST_OPTIONS "${ARGN}")
+  run_cmake(${test})
+endfunction()
+
+function(run_cmake_with_raw_args test args)
+  set(RunCMake_TEST_RAW_ARGS "${args}")
   run_cmake(${test})
 endfunction()
 

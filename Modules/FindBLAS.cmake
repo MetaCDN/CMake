@@ -12,7 +12,7 @@ This module finds an installed Fortran library that implements the
 
 At least one of the ``C``, ``CXX``, or ``Fortran`` languages must be enabled.
 
-.. _`BLAS linear-algebra interface`: http://www.netlib.org/blas/
+.. _`BLAS linear-algebra interface`: https://netlib.org/blas/
 
 Input Variables
 ^^^^^^^^^^^^^^^
@@ -34,6 +34,12 @@ The following variables may be set to influence this module's behavior:
 
   if set ``pkg-config`` will be used to search for a BLAS library first
   and if one is found that is preferred
+
+``BLA_PKGCONFIG_BLAS``
+  .. versionadded:: 3.25
+
+  If set, the ``pkg-config`` method will look for this module name instead of
+  just ``blas``.
 
 ``BLA_SIZEOF_INTEGER``
   .. versionadded:: 3.22
@@ -273,8 +279,11 @@ endif()
 include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
 
 if(BLA_PREFER_PKGCONFIG)
-  find_package(PkgConfig)
-  pkg_check_modules(PKGC_BLAS blas)
+  if(NOT BLA_PKGCONFIG_BLAS)
+    set(BLA_PKGCONFIG_BLAS "blas")
+  endif()
+  find_package(PkgConfig QUIET)
+  pkg_check_modules(PKGC_BLAS QUIET ${BLA_PKGCONFIG_BLAS})
   if(PKGC_BLAS_FOUND)
     set(BLAS_FOUND ${PKGC_BLAS_FOUND})
     set(BLAS_LIBRARIES "${PKGC_BLAS_LINK_LIBRARIES}")
@@ -437,7 +446,7 @@ if(BLA_VENDOR MATCHES "Intel" OR BLA_VENDOR STREQUAL "All")
           set(BLAS_mkl_END_GROUP "")
         endif()
         # Switch to GNU Fortran support layer if needed (but not on Apple, where MKL does not provide it)
-        if(CMAKE_Fortran_COMPILER_LOADED AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND NOT APPLE)
+        if(CMAKE_Fortran_COMPILER_LOADED AND (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" OR CMAKE_Fortran_COMPILER_ID STREQUAL "LCC") AND NOT APPLE)
             set(BLAS_mkl_INTFACE "gf")
             set(BLAS_mkl_THREADING "gnu")
             set(BLAS_mkl_OMP "gomp")
@@ -756,10 +765,10 @@ if(BLA_VENDOR STREQUAL "OpenBLAS" OR BLA_VENDOR STREQUAL "All")
     set(_threadlibs "${CMAKE_THREAD_LIBS_INIT}")
     if(BLA_STATIC)
       if (CMAKE_C_COMPILER_LOADED)
-        find_package(OpenMP COMPONENTS C)
+        find_package(OpenMP QUIET COMPONENTS C)
         list(PREPEND _threadlibs "${OpenMP_C_LIBRARIES}")
       elseif(CMAKE_CXX_COMPILER_LOADED)
-        find_package(OpenMP COMPONENTS CXX)
+        find_package(OpenMP QUIET COMPONENTS CXX)
         list(PREPEND _threadlibs "${OpenMP_CXX_LIBRARIES}")
       endif()
     endif()

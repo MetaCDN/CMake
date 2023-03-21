@@ -9,6 +9,7 @@
 #include "cmExecutionStatus.h"
 #include "cmGlobalGenerator.h"
 #include "cmInstalledFile.h"
+#include "cmListFileCache.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmPolicies.h"
@@ -561,7 +562,8 @@ bool HandleTarget(cmTarget* target, cmMakefile& makefile,
 {
   // Set or append the property.
   if (appendMode) {
-    target->AppendProperty(propertyName, propertyValue, appendAsString);
+    target->AppendProperty(propertyName, propertyValue,
+                           makefile.GetBacktrace(), appendAsString);
   } else {
     if (remove) {
       target->SetProperty(propertyName, nullptr);
@@ -617,10 +619,9 @@ bool HandleSource(cmSourceFile* sf, const std::string& propertyName,
   if (propertyName == "GENERATED") {
     SetPropertyCommand::PropertyOp op = (remove)
       ? SetPropertyCommand::PropertyOp::Remove
-      : (appendAsString)
-        ? SetPropertyCommand::PropertyOp::AppendAsString
-        : (appendMode) ? SetPropertyCommand::PropertyOp::Append
-                       : SetPropertyCommand::PropertyOp::Set;
+      : (appendAsString) ? SetPropertyCommand::PropertyOp::AppendAsString
+      : (appendMode)     ? SetPropertyCommand::PropertyOp::Append
+                         : SetPropertyCommand::PropertyOp::Set;
     return SetPropertyCommand::HandleAndValidateSourceFilePropertyGENERATED(
       sf, propertyValue, op);
   }

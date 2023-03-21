@@ -22,10 +22,10 @@
 
 /// @brief Merges newOpts into baseOpts
 /// @arg valueOpts list of options that accept a value
-void MergeOptions(std::vector<std::string>& baseOpts,
-                  std::vector<std::string> const& newOpts,
-                  std::initializer_list<cm::string_view> valueOpts,
-                  bool isQt5OrLater)
+static void MergeOptions(std::vector<std::string>& baseOpts,
+                         std::vector<std::string> const& newOpts,
+                         std::initializer_list<cm::string_view> valueOpts,
+                         bool isQt5OrLater)
 {
   if (newOpts.empty()) {
     return;
@@ -75,6 +75,13 @@ void MergeOptions(std::vector<std::string>& baseOpts,
 // - Class definitions
 
 unsigned int const cmQtAutoGen::ParallelMax = 64;
+
+#ifdef _WIN32
+// Actually 32767 (see
+// https://devblogs.microsoft.com/oldnewthing/20031210-00/?p=41553) but we
+// allow for a small margin
+size_t const cmQtAutoGen::CommandLineLengthMax = 32000;
+#endif
 
 cm::string_view cmQtAutoGen::GeneratorName(GenT genType)
 {

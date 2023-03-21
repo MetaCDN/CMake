@@ -18,6 +18,7 @@
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
+#include "cmListFileCache.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmPolicies.h"
@@ -152,8 +153,12 @@ struct StandardLevelComputer
              "dialect \""
           << this->Language << *standardProp << "\" "
           << (ext ? "(with compiler extensions)" : "")
-          << ", but CMake "
-             "does not know the compile flags to use to enable it.";
+          << ". But the current compiler \""
+          << makefile->GetSafeDefinition("CMAKE_" + this->Language +
+                                         "_COMPILER_ID")
+          << "\" does not support this, or "
+             "CMake does not know the flags to enable it.";
+
         makefile->IssueMessage(MessageType::FATAL_ERROR, e.str());
       }
       return option_flag;
@@ -206,7 +211,9 @@ struct StandardLevelComputer
 
     // If the standard requested is older than the compiler's default or the
     // extension mode doesn't match then we need to use a flag.
-    if (stdIt < defaultStdIt) {
+    if ((cmp0128 != cmPolicies::NEW && stdIt <= defaultStdIt) ||
+        (cmp0128 == cmPolicies::NEW &&
+         (stdIt < defaultStdIt || ext != defaultExt))) {
       auto offset = std::distance(cm::cbegin(stds), stdIt);
       return cmStrCat("CMAKE_", this->Language, stdsStrings[offset], "_", type,
                       "_COMPILE_OPTION");
@@ -372,25 +379,29 @@ std::unordered_map<std::string, StandardLevelComputer>
         "C", std::vector<int>{ 90, 99, 11, 17, 23 },
         std::vector<std::string>{ "90", "99", "11", "17", "23" } } },
     { "CXX",
-      StandardLevelComputer{
-        "CXX", std::vector<int>{ 98, 11, 14, 17, 20, 23 },
-        std::vector<std::string>{ "98", "11", "14", "17", "20", "23" } } },
+      StandardLevelComputer{ "CXX",
+                             std::vector<int>{ 98, 11, 14, 17, 20, 23, 26 },
+                             std::vector<std::string>{ "98", "11", "14", "17",
+                                                       "20", "23", "26" } } },
     { "CUDA",
-      StandardLevelComputer{
-        "CUDA", std::vector<int>{ 03, 11, 14, 17, 20, 23 },
-        std::vector<std::string>{ "03", "11", "14", "17", "20", "23" } } },
+      StandardLevelComputer{ "CUDA",
+                             std::vector<int>{ 03, 11, 14, 17, 20, 23, 26 },
+                             std::vector<std::string>{ "03", "11", "14", "17",
+                                                       "20", "23", "26" } } },
     { "OBJC",
       StandardLevelComputer{
         "OBJC", std::vector<int>{ 90, 99, 11, 17, 23 },
         std::vector<std::string>{ "90", "99", "11", "17", "23" } } },
     { "OBJCXX",
-      StandardLevelComputer{
-        "OBJCXX", std::vector<int>{ 98, 11, 14, 17, 20, 23 },
-        std::vector<std::string>{ "98", "11", "14", "17", "20", "23" } } },
+      StandardLevelComputer{ "OBJCXX",
+                             std::vector<int>{ 98, 11, 14, 17, 20, 23, 26 },
+                             std::vector<std::string>{ "98", "11", "14", "17",
+                                                       "20", "23", "26" } } },
     { "HIP",
-      StandardLevelComputer{
-        "HIP", std::vector<int>{ 98, 11, 14, 17, 20, 23 },
-        std::vector<std::string>{ "98", "11", "14", "17", "20", "23" } } }
+      StandardLevelComputer{ "HIP",
+                             std::vector<int>{ 98, 11, 14, 17, 20, 23, 26 },
+                             std::vector<std::string>{ "98", "11", "14", "17",
+                                                       "20", "23", "26" } } }
   };
 }
 
@@ -410,7 +421,8 @@ bool cmStandardLevelResolver::AddRequiredTargetFeature(
   cmTarget* target, const std::string& feature, std::string* error) const
 {
   if (cmGeneratorExpression::Find(feature) != std::string::npos) {
-    target->AppendProperty("COMPILE_FEATURES", feature);
+    target->AppendProperty("COMPILE_FEATURES", feature,
+                           this->Makefile->GetBacktrace());
     return true;
   }
 
@@ -420,7 +432,8 @@ bool cmStandardLevelResolver::AddRequiredTargetFeature(
     return false;
   }
 
-  target->AppendProperty("COMPILE_FEATURES", feature);
+  target->AppendProperty("COMPILE_FEATURES", feature,
+                         this->Makefile->GetBacktrace());
 
   // FIXME: Add a policy to avoid updating the <LANG>_STANDARD target
   // property due to COMPILE_FEATURES.  The language standard selection

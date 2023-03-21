@@ -8,13 +8,17 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
+#include <cm/optional>
+
 #include "cmDefinitions.h"
+#include "cmDependencyProvider.h"
 #include "cmLinkedTree.h"
-#include "cmListFileCache.h"
 #include "cmPolicies.h"
 #include "cmProperty.h"
 #include "cmPropertyDefinition.h"
@@ -30,6 +34,11 @@ class cmMakefile;
 class cmStateSnapshot;
 class cmMessenger;
 class cmExecutionStatus;
+class cmListFileBacktrace;
+struct cmListFileArgument;
+
+template <typename T>
+class BT;
 
 class cmState
 {
@@ -44,6 +53,7 @@ public:
     FindPackage,
     CTest,
     CPack,
+    Help
   };
 
   enum class ProjectKind
@@ -133,11 +143,17 @@ public:
   // Define a property
   void DefineProperty(const std::string& name, cmProperty::ScopeType scope,
                       const std::string& ShortDescription,
-                      const std::string& FullDescription, bool chain = false);
+                      const std::string& FullDescription, bool chain = false,
+                      const std::string& initializeFromVariable = "");
 
   // get property definition
   cmPropertyDefinition const* GetPropertyDefinition(
     const std::string& name, cmProperty::ScopeType scope) const;
+
+  const cmPropertyDefinitionMap& GetPropertyDefinitions() const
+  {
+    return this->PropertyDefinitions;
+  }
 
   bool IsPropertyChained(const std::string& name,
                          cmProperty::ScopeType scope) const;
@@ -217,6 +233,24 @@ public:
 
   ProjectKind GetProjectKind() const;
 
+  void ClearDependencyProvider() { this->DependencyProvider.reset(); }
+  void SetDependencyProvider(cmDependencyProvider provider)
+  {
+    this->DependencyProvider = std::move(provider);
+  }
+  cm::optional<cmDependencyProvider> const& GetDependencyProvider() const
+  {
+    return this->DependencyProvider;
+  }
+  Command GetDependencyProviderCommand(
+    cmDependencyProvider::Method method) const;
+
+  void SetInTopLevelIncludes(bool inTopLevelIncludes)
+  {
+    this->ProcessingTopLevelIncludes = inTopLevelIncludes;
+  }
+  bool InTopLevelIncludes() const { return this->ProcessingTopLevelIncludes; }
+
 private:
   friend class cmake;
   void AddCacheEntry(const std::string& key, const char* value,
@@ -238,13 +272,14 @@ private:
   bool DoWriteGlobVerifyTarget() const;
   std::string const& GetGlobVerifyScript() const;
   std::string const& GetGlobVerifyStamp() const;
-  bool SaveVerificationScript(const std::string& path);
+  bool SaveVerificationScript(const std::string& path, cmMessenger* messenger);
   void AddGlobCacheEntry(bool recurse, bool listDirectories,
                          bool followSymlinks, const std::string& relative,
                          const std::string& expression,
                          const std::vector<std::string>& files,
                          const std::string& variable,
-                         cmListFileBacktrace const& bt);
+                         cmListFileBacktrace const& bt,
+                         cmMessenger* messenger);
 
   cmPropertyDefinitionMap PropertyDefinitions;
   std::vector<std::string> EnabledLanguages;
@@ -277,4 +312,6 @@ private:
   bool NinjaMulti = false;
   Mode StateMode = Unknown;
   ProjectKind StateProjectKind = ProjectKind::Normal;
+  cm::optional<cmDependencyProvider> DependencyProvider;
+  bool ProcessingTopLevelIncludes = false;
 };

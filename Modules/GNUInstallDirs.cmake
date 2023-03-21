@@ -52,8 +52,10 @@ where ``<dir>`` is one of:
   .. versionadded:: 3.9
     run-time variable data (``LOCALSTATEDIR/run``)
 ``LIBDIR``
-  object code libraries (``lib`` or ``lib64``
-  or ``lib/<multiarch-tuple>`` on Debian)
+  object code libraries (``lib`` or ``lib64``)
+
+  On Debian, this may be ``lib/<multiarch-tuple>`` when
+  :variable:`CMAKE_INSTALL_PREFIX` is ``/usr``.
 ``INCLUDEDIR``
   C header files (``include``)
 ``OLDINCLUDEDIR``
@@ -109,6 +111,8 @@ The following values of :variable:`CMAKE_INSTALL_PREFIX` are special:
   if it is not user-specified as an absolute path.
   For example, the ``SYSCONFDIR`` value ``etc`` becomes ``/etc/opt/...``.
   This is defined by the `Filesystem Hierarchy Standard`_.
+
+  This behavior does not apply to paths under ``/opt/homebrew/...``.
 
 .. _`Filesystem Hierarchy Standard`: https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html
 
@@ -253,7 +257,9 @@ if(NOT DEFINED CMAKE_INSTALL_LIBDIR OR (_libdir_set
     elseif(DEFINED ENV{CONDA_PREFIX})
       set(conda_prefix "$ENV{CONDA_PREFIX}")
       cmake_path(ABSOLUTE_PATH conda_prefix NORMALIZE)
-      if("${CMAKE_INSTALL_PREFIX}" STREQUAL conda_prefix)
+      if("${CMAKE_INSTALL_PREFIX}" STREQUAL conda_prefix AND
+         NOT ("${CMAKE_INSTALL_PREFIX}" MATCHES "^/usr/?$" OR
+              "${CMAKE_INSTALL_PREFIX}" MATCHES "^/usr/local/?$"))
         set(__system_type_for_install "conda")
       endif()
     endif()
@@ -326,7 +332,7 @@ else()
     "Info documentation (DATAROOTDIR/info)")
 endif()
 
-if(CMAKE_SYSTEM_NAME MATCHES "^(([^k].*)?BSD|DragonFly)$")
+if(CMAKE_SYSTEM_NAME MATCHES "^(([^k].*)?BSD|DragonFly)$" AND NOT CMAKE_SYSTEM_NAME MATCHES "^(FreeBSD)$")
   _GNUInstallDirs_cache_path_fallback(CMAKE_INSTALL_MANDIR "man"
     "Man documentation (man)")
 else()
@@ -396,7 +402,7 @@ macro(GNUInstallDirs_get_absolute_install_dir absvar var)
       else()
         set(${absvar} "${CMAKE_INSTALL_PREFIX}/${${var}}")
       endif()
-    elseif("${CMAKE_INSTALL_PREFIX}" MATCHES "^/opt/.*")
+    elseif("${CMAKE_INSTALL_PREFIX}" MATCHES "^/opt/" AND NOT "${CMAKE_INSTALL_PREFIX}" MATCHES "^/opt/homebrew/")
       if("${GGAID_dir}" STREQUAL "SYSCONFDIR" OR "${GGAID_dir}" STREQUAL "LOCALSTATEDIR" OR "${GGAID_dir}" STREQUAL "RUNSTATEDIR")
         set(${absvar} "/${${var}}${CMAKE_INSTALL_PREFIX}")
       else()

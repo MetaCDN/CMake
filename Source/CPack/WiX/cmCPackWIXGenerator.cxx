@@ -89,10 +89,21 @@ bool cmCPackWIXGenerator::RunCandleCommand(std::string const& sourceFile,
     return false;
   }
 
+  std::string arch;
+  if (cmValue archOpt = GetOption("CPACK_WIX_ARCHITECTURE")) {
+    arch = *archOpt;
+  } else {
+    arch = GetArchitecture();
+    cmCPackLogger(
+      cmCPackLog::LOG_VERBOSE,
+      "CPACK_WIX_ARCHITECTURE was not set. Invoking WiX with architecture "
+        << arch << " . " << std::endl);
+  }
+
   std::ostringstream command;
   command << QuotePath(executable);
   command << " -nologo";
-  command << " -arch " << GetArchitecture();
+  command << " -arch " << arch;
   command << " -out " << QuotePath(objectFile);
 
   for (std::string const& ext : CandleExtensions) {
@@ -140,7 +151,7 @@ bool cmCPackWIXGenerator::RunLightCommand(std::string const& objectFiles)
 
 int cmCPackWIXGenerator::PackageFiles()
 {
-  if (!PackageFilesImpl() || cmSystemTools::GetErrorOccuredFlag()) {
+  if (!PackageFilesImpl() || cmSystemTools::GetErrorOccurredFlag()) {
     cmCPackLogger(cmCPackLog::LOG_ERROR,
                   "Fatal WiX Generator Error" << std::endl);
     return false;
@@ -411,9 +422,9 @@ void cmCPackWIXGenerator::CopyDefinition(cmWIXSourceWriter& source,
   cmValue value = GetOption(name);
   if (value) {
     if (type == DefinitionType::PATH) {
-      AddDefinition(source, name, CMakeToWixPath(value));
+      AddDefinition(source, name, CMakeToWixPath(*value));
     } else {
-      AddDefinition(source, name, value);
+      AddDefinition(source, name, *value);
     }
   }
 }
@@ -493,7 +504,7 @@ bool cmCPackWIXGenerator::CreateWiXSourceFiles()
   }
   featureDefinitions.AddAttribute("Title", featureTitle);
   if (cmValue desc = GetOption("CPACK_WIX_ROOT_FEATURE_DESCRIPTION")) {
-    featureDefinitions.AddAttribute("Description", desc);
+    featureDefinitions.AddAttribute("Description", *desc);
   }
   featureDefinitions.AddAttribute("Level", "1");
   this->Patch->ApplyFragment("#PRODUCTFEATURE", featureDefinitions);
@@ -501,7 +512,7 @@ bool cmCPackWIXGenerator::CreateWiXSourceFiles()
   cmValue package = GetOption("CPACK_WIX_CMAKE_PACKAGE_REGISTRY");
   if (package) {
     featureDefinitions.CreateCMakePackageRegistryEntry(
-      package, GetOption("CPACK_WIX_UPGRADE_GUID"));
+      *package, GetOption("CPACK_WIX_UPGRADE_GUID"));
   }
 
   if (!CreateFeatureHierarchy(featureDefinitions)) {

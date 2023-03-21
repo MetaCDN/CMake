@@ -12,7 +12,7 @@ def read_codemodel_json_data(filename):
 def check_objects(o, g):
     assert is_list(o)
     assert len(o) == 1
-    check_index_object(o[0], "codemodel", 2, 3, check_object_codemodel(g))
+    check_index_object(o[0], "codemodel", 2, 5, check_object_codemodel(g))
 
 def check_backtrace(t, b, backtrace):
     btg = t["backtraceGraph"]
@@ -188,6 +188,41 @@ def check_directory(c):
                 expected_keys.append("runtimeDependencySetType")
                 assert is_string(a["runtimeDependencySetType"], e["runtimeDependencySetType"])
 
+            if e.get("fileSetName", None) is not None:
+                expected_keys.append("fileSetName")
+                assert is_string(a["fileSetName"], e["fileSetName"])
+
+            if e.get("fileSetType", None) is not None:
+                expected_keys.append("fileSetType")
+                assert is_string(a["fileSetType"], e["fileSetType"])
+
+            if e.get("fileSetDirectories", None) is not None:
+                expected_keys.append("fileSetDirectories")
+                assert is_list(a["fileSetDirectories"])
+                assert len(a["fileSetDirectories"]) == len(e["fileSetDirectories"])
+                for ad, ed in zip(a["fileSetDirectories"], e["fileSetDirectories"]):
+                    assert matches(ad, ed)
+
+            if e.get("fileSetTarget", None) is not None:
+                expected_keys.append("fileSetTarget")
+                et = e["fileSetTarget"]
+                at = a["fileSetTarget"]
+                assert is_dict(at)
+                assert sorted(at.keys()) == ["id", "index"]
+                assert matches(at["id"], et["id"])
+                assert is_int(at["index"])
+                assert c["targets"][at["index"]]["name"] == et["index"]
+
+            if e.get("cxxModuleBmiTarget", None) is not None:
+                expected_keys.append("cxxModuleBmiTarget")
+                et = e["cxxModuleBmiTarget"]
+                at = a["cxxModuleBmiTarget"]
+                assert is_dict(at)
+                assert sorted(at.keys()) == ["id", "index"]
+                assert matches(at["id"], et["id"])
+                assert is_int(at["index"])
+                assert c["targets"][at["index"]]["name"] == et["index"]
+
             if e["backtrace"] is not None:
                 expected_keys.append("backtrace")
                 check_backtrace(d, a["backtrace"], e["backtrace"])
@@ -256,9 +291,29 @@ def check_target(c):
         assert matches(obj["paths"]["build"], expected["build"])
         assert matches(obj["paths"]["source"], expected["source"])
 
+        def check_file_set(actual, expected):
+            assert is_dict(actual)
+            expected_keys = ["name", "type", "visibility", "baseDirectories"]
+
+            assert is_string(actual["name"], expected["name"])
+            assert is_string(actual["type"], expected["type"])
+            assert is_string(actual["visibility"], expected["visibility"])
+
+            check_list_match(lambda a, e: matches(a, e), actual["baseDirectories"],
+                             expected["baseDirectories"],
+                             check_exception=lambda a, e: "File set base directory (check): %s" % a,
+                             missing_exception=lambda e: "File set base directory (missing): %s" % e,
+                             extra_exception=lambda a: "File set base directory (extra): %s" % a)
+
+            assert sorted(actual.keys()) == sorted(expected_keys)
+
         def check_source(actual, expected):
             assert is_dict(actual)
             expected_keys = ["path"]
+
+            if expected["fileSetName"] is not None:
+                expected_keys.append("fileSetIndex")
+                assert is_string(obj["fileSets"][actual["fileSetIndex"]]["name"], expected["fileSetName"])
 
             if expected["compileGroupLanguage"] is not None:
                 expected_keys.append("compileGroupIndex")
@@ -277,6 +332,14 @@ def check_target(c):
                 check_backtrace(obj, actual["backtrace"], expected["backtrace"])
 
             assert sorted(actual.keys()) == sorted(expected_keys)
+
+        if expected["fileSets"] is not None:
+            expected_keys.append("fileSets")
+            check_list_match(lambda a, e: matches(a["name"], e["name"]), obj["fileSets"],
+                             expected["fileSets"], check=check_file_set,
+                             check_exception=lambda a, e: "File set: %s" % a["name"],
+                             missing_exception=lambda e: "File set: %s" % e["name"],
+                             extra_exception=lambda a: "File set: %s" % a["name"])
 
         check_list_match(lambda a, e: matches(a["path"], e["path"]), obj["sources"],
                          expected["sources"], check=check_source,
@@ -628,6 +691,8 @@ def gen_check_directories(c, g):
         read_codemodel_json_data("directories/dir.json"),
         read_codemodel_json_data("directories/dir_dir.json"),
         read_codemodel_json_data("directories/external.json"),
+        read_codemodel_json_data("directories/fileset.json"),
+        read_codemodel_json_data("directories/subdir.json"),
     ]
 
     if matches(g["name"], "^Visual Studio "):
@@ -686,6 +751,7 @@ def gen_check_targets(c, g, inSource):
         read_codemodel_json_data("targets/c_shared_exe.json"),
         read_codemodel_json_data("targets/c_static_lib.json"),
         read_codemodel_json_data("targets/c_static_exe.json"),
+        read_codemodel_json_data("targets/c_subdir.json"),
 
         read_codemodel_json_data("targets/all_build_cxx.json"),
         read_codemodel_json_data("targets/zero_check_cxx.json"),
@@ -729,9 +795,12 @@ def gen_check_targets(c, g, inSource):
         read_codemodel_json_data("targets/all_build_external.json"),
         read_codemodel_json_data("targets/zero_check_external.json"),
         read_codemodel_json_data("targets/generated_exe.json"),
+
+        read_codemodel_json_data("targets/c_headers_1.json"),
+        read_codemodel_json_data("targets/c_headers_2.json"),
     ]
 
-    if cxx_compiler_id in ['Clang', 'AppleClang', 'GNU', 'Intel', 'IntelLLVM', 'MSVC', 'Embarcadero'] and g["name"] != "Xcode":
+    if cxx_compiler_id in ['Clang', 'AppleClang', 'LCC', 'GNU', 'Intel', 'IntelLLVM', 'MSVC', 'Embarcadero', 'IBMClang'] and g["name"] != "Xcode":
         for e in expected:
             if e["name"] == "cxx_exe":
                 if matches(g["name"], "^(Visual Studio |Ninja Multi-Config)"):
@@ -783,6 +852,7 @@ def gen_check_targets(c, g, inSource):
                         {
                             "path": "^.*/Tests/RunCMake/FileAPI/codemodel-v2-build/CMakeFiles/([0-9a-f]+/)?generate\\.stamp\\.rule$",
                             "isGenerated": True,
+                            "fileSetName": None,
                             "sourceGroupName": "CMake Rules",
                             "compileGroupLanguage": None,
                             "backtrace": [

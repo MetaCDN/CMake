@@ -56,6 +56,13 @@
     "flags": []
   },
   {
+    "name": "CLRSupport",
+    "switch": "clr:netcore",
+    "comment": ".NET Core Runtime Support",
+    "value": "NetCore",
+    "flags": []
+  },
+  {
     "name": "WarningLevel",
     "switch": "W0",
     "comment": "Turn Off All Warnings",
@@ -1285,6 +1292,17 @@
     "value": "",
     "flags": [
       "UserValue",
+      "UserRequired",
+      "SemicolonAppendable"
+    ]
+  },
+  {
+    "name": "ForcedIncludeFiles",
+    "switch": "FI",
+    "comment": "Forced Include File",
+    "value": "",
+    "flags": [
+      "UserFollowing",
       "SemicolonAppendable"
     ]
   },

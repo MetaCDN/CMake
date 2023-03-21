@@ -26,6 +26,14 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
     if(DEFINED CMAKE_${lang}_VERBOSE_COMPILE_FLAG)
       set(COMPILE_DEFINITIONS "${CMAKE_${lang}_VERBOSE_COMPILE_FLAG}")
     endif()
+    if(lang STREQUAL "CUDA")
+      if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
+        # We are about to detect the native architectures, so we do
+        # not yet know them.  Use all architectures during detection.
+        set(CMAKE_CUDA_ARCHITECTURES "all")
+      endif()
+      set(CMAKE_CUDA_RUNTIME_LIBRARY "Static")
+    endif()
     if(NOT "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xMSVC")
       # Avoid adding our own platform standard libraries for compilers
       # from which we might detect implicit link libraries.
@@ -47,7 +55,7 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
     set(ENV{LANG}        C)
 
     try_compile(CMAKE_${lang}_ABI_COMPILED
-      ${CMAKE_BINARY_DIR} ${src}
+      SOURCES ${src}
       CMAKE_FLAGS ${CMAKE_FLAGS}
                   # Ignore unused flags when we are just determining the ABI.
                   "--no-warn-unused-cli"
@@ -74,8 +82,6 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
     # Load the resulting information strings.
     if(CMAKE_${lang}_ABI_COMPILED)
       message(CHECK_PASS "done")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-        "Detecting ${lang} compiler ABI info compiled with the following output:\n${OUTPUT}\n\n")
       file(STRINGS "${BIN}" ABI_STRINGS LIMIT_COUNT 32 REGEX "INFO:[A-Za-z0-9_]+\\[[^]]*\\]")
       set(ABI_SIZEOF_DPTR "NOTFOUND")
       set(ABI_BYTE_ORDER "NOTFOUND")
@@ -118,8 +124,8 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
         set (implicit_incdirs "")
         cmake_parse_implicit_include_info("${OUTPUT}" "${lang}"
           implicit_incdirs log rv)
-        file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-          "Parsed ${lang} implicit include dir info from above output: rv=${rv}\n${log}\n\n")
+        message(CONFIGURE_LOG
+          "Parsed ${lang} implicit include dir info: rv=${rv}\n${log}\n\n")
         if("${rv}" STREQUAL "done")
           # Entries that we have been told to explicitly pass as standard include
           # directories will not be implicitly added by the compiler.
@@ -141,9 +147,10 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
       if(CMAKE_${lang}_VERBOSE_FLAG)
         CMAKE_PARSE_IMPLICIT_LINK_INFO("${OUTPUT}" implicit_libs implicit_dirs implicit_fwks log
           "${CMAKE_${lang}_IMPLICIT_OBJECT_REGEX}"
-          COMPUTE_IMPLICIT_OBJECTS implicit_objs)
-        file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeOutput.log
-          "Parsed ${lang} implicit link information from above output:\n${log}\n\n")
+          COMPUTE_IMPLICIT_OBJECTS implicit_objs
+          LANGUAGE ${lang})
+        message(CONFIGURE_LOG
+          "Parsed ${lang} implicit link information:\n${log}\n\n")
       endif()
       # for VS IDE Intel Fortran we have to figure out the
       # implicit link path for the fortran run time using
@@ -153,8 +160,9 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
         message(CHECK_START "Determine Intel Fortran Compiler Implicit Link Path")
         # Build a sample project which reports symbols.
         try_compile(IFORT_LIB_PATH_COMPILED
-          ${CMAKE_BINARY_DIR}/CMakeFiles/IntelVSImplicitPath
-          ${CMAKE_ROOT}/Modules/IntelVSImplicitPath
+          PROJECT IntelFortranImplicit
+          SOURCE_DIR ${CMAKE_ROOT}/Modules/IntelVSImplicitPath
+          BINARY_DIR ${CMAKE_BINARY_DIR}/CMakeFiles/IntelVSImplicitPath
           IntelFortranImplicit
           CMAKE_FLAGS
           "-DCMAKE_Fortran_FLAGS:STRING=${CMAKE_Fortran_FLAGS}"
@@ -185,8 +193,6 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
 
     else()
       message(CHECK_FAIL "failed")
-      file(APPEND ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log
-        "Detecting ${lang} compiler ABI info failed to compile with the following output:\n${OUTPUT}\n${_copy_error}\n\n")
     endif()
   endif()
 endfunction()

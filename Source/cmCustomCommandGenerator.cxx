@@ -91,7 +91,7 @@ std::string EvaluateSplitConfigGenex(
 
     // Record targets referenced by the genex.
     if (utils) {
-      // FIXME: What is the proper condition for a cross-dependency?
+      // Use a cross-dependency if we referenced the command config.
       bool const cross = !useOutputConfig;
       for (cmGeneratorTarget* gt : cge->GetTargets()) {
         utils->emplace(BT<std::pair<std::string, bool>>(
@@ -148,6 +148,14 @@ std::string EvaluateDepfile(std::string const& path,
   std::unique_ptr<cmCompiledGeneratorExpression> cge = ge.Parse(path);
   return cge->Evaluate(lg, config);
 }
+
+std::string EvaluateComment(const char* comment,
+                            cmGeneratorExpression const& ge,
+                            cmLocalGenerator* lg, std::string const& config)
+{
+  std::unique_ptr<cmCompiledGeneratorExpression> cge = ge.Parse(comment);
+  return cge->Evaluate(lg, config);
+}
 }
 
 cmCustomCommandGenerator::cmCustomCommandGenerator(
@@ -172,9 +180,11 @@ cmCustomCommandGenerator::cmCustomCommandGenerator(
     };
   }
 
-  cmGeneratorExpression ge(cc.GetBacktrace());
+  cmGeneratorExpression ge(*lg->GetCMakeInstance(), cc.GetBacktrace());
   cmGeneratorTarget const* target{ lg->FindGeneratorTargetToUse(
     this->Target) };
+
+  bool const distinctConfigs = this->OutputConfig != this->CommandConfig;
 
   const cmCustomCommandLines& cmdlines = this->CC->GetCommandLines();
   for (cmCustomCommandLine const& cmdline : cmdlines) {
@@ -191,8 +201,10 @@ cmCustomCommandGenerator::cmCustomCommandGenerator(
         argv.push_back(std::move(parsed_arg));
       }
 
-      // For remaining arguments, we default to the OUTPUT_CONFIG.
-      useOutputConfig = true;
+      if (distinctConfigs) {
+        // For remaining arguments, we default to the OUTPUT_CONFIG.
+        useOutputConfig = true;
+      }
     }
 
     if (!argv.empty()) {
@@ -200,7 +212,7 @@ cmCustomCommandGenerator::cmCustomCommandGenerator(
       // collect the target to add a target-level dependency on it.
       cmGeneratorTarget* gt = this->LG->FindGeneratorTargetToUse(argv.front());
       if (gt && gt->GetType() == cmStateEnums::EXECUTABLE) {
-        // FIXME: What is the proper condition for a cross-dependency?
+        // GetArgv0Location uses the command config, so use a cross-dependency.
         bool const cross = true;
         this->Utilities.emplace(BT<std::pair<std::string, bool>>(
           { gt->GetName(), cross }, cc.GetBacktrace()));
@@ -342,7 +354,7 @@ std::string cmCustomCommandGenerator::GetCommand(unsigned int c) const
   return this->CommandLines[c][0];
 }
 
-std::string escapeForShellOldStyle(const std::string& str)
+static std::string escapeForShellOldStyle(const std::string& str)
 {
   std::string result;
 #if defined(_WIN32) && !defined(__CYGWIN__)
@@ -413,7 +425,8 @@ std::string cmCustomCommandGenerator::GetDepfile() const
     return "";
   }
 
-  cmGeneratorExpression ge(this->CC->GetBacktrace());
+  cmGeneratorExpression ge(*this->LG->GetCMakeInstance(),
+                           this->CC->GetBacktrace());
   return EvaluateDepfile(depfile, ge, this->LG, this->OutputConfig);
 }
 
@@ -458,9 +471,19 @@ std::string cmCustomCommandGenerator::GetInternalDepfile() const
   return this->ComputeInternalDepfile(this->OutputConfig, depfile);
 }
 
-const char* cmCustomCommandGenerator::GetComment() const
+cm::optional<std::string> cmCustomCommandGenerator::GetComment() const
 {
-  return this->CC->GetComment();
+  const char* comment = this->CC->GetComment();
+  if (!comment) {
+    return cm::nullopt;
+  }
+  if (!*comment) {
+    return std::string();
+  }
+
+  cmGeneratorExpression ge(*this->LG->GetCMakeInstance(),
+                           this->CC->GetBacktrace());
+  return EvaluateComment(comment, ge, this->LG, this->OutputConfig);
 }
 
 std::string cmCustomCommandGenerator::GetWorkingDirectory() const

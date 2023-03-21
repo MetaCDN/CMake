@@ -111,7 +111,7 @@ Windows using WiX.
  simply provide the name of the culture.  If you specify more than one
  culture identifier in a comma or semicolon delimited list, the first one
  that is found will be used.  You can find a list of supported languages at:
- http://wix.sourceforge.net/manual-wix3/WixUI_localization.htm
+ https://wixtoolset.org//documentation/manual/v3/wixui/wixui_localization.html
 
 .. variable:: CPACK_WIX_TEMPLATE
 
@@ -328,3 +328,12 @@ Windows using WiX.
  If this variable is set then the inclusion of WixUIExtensions is skipped,
  i.e. the ``-ext "WixUIExtension"`` command line is not included during
  the execution of the WiX light tool.
+
+.. variable:: CPACK_WIX_ARCHITECTURE
+
+ .. versionadded:: 3.24
+
+ This variable can be optionally set to specify the target architecture
+ of the installer. May for example be set to ``x64`` or ``arm64``.
+
+ When unspecified, CPack will default to ``x64`` or ``x86``.

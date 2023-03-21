@@ -2,20 +2,25 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmCommonTargetGenerator.h"
 
-#include <set>
+#include <algorithm>
 #include <sstream>
 #include <utility>
+
+#include <cm/string_view>
+#include <cmext/string_view>
 
 #include "cmComputeLinkInformation.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalCommonGenerator.h"
-#include "cmLinkLineComputer.h"
+#include "cmGlobalGenerator.h"
 #include "cmLocalCommonGenerator.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
 #include "cmOutputConverter.h"
 #include "cmRange.h"
 #include "cmSourceFile.h"
+#include "cmState.h"
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmTarget.h"
@@ -43,33 +48,6 @@ cmValue cmCommonTargetGenerator::GetFeature(const std::string& feature,
                                             const std::string& config)
 {
   return this->GeneratorTarget->GetFeature(feature, config);
-}
-
-void cmCommonTargetGenerator::AddModuleDefinitionFlag(
-  cmLinkLineComputer* linkLineComputer, std::string& flags,
-  const std::string& config)
-{
-  cmGeneratorTarget::ModuleDefinitionInfo const* mdi =
-    this->GeneratorTarget->GetModuleDefinitionInfo(config);
-  if (!mdi || mdi->DefFile.empty()) {
-    return;
-  }
-
-  // TODO: Create a per-language flag variable.
-  cmValue defFileFlag =
-    this->Makefile->GetDefinition("CMAKE_LINK_DEF_FILE_FLAG");
-  if (!defFileFlag) {
-    return;
-  }
-
-  // Append the flag and value.  Use ConvertToLinkReference to help
-  // vs6's "cl -link" pass it to the linker.
-  std::string flag =
-    cmStrCat(*defFileFlag,
-             this->LocalCommonGenerator->ConvertToOutputFormat(
-               linkLineComputer->ConvertToLinkReference(mdi->DefFile),
-               cmOutputConverter::SHELL));
-  this->LocalCommonGenerator->AppendFlags(flags, flag);
 }
 
 void cmCommonTargetGenerator::AppendFortranFormatFlags(
@@ -101,7 +79,8 @@ void cmCommonTargetGenerator::AppendFortranFormatFlags(
 }
 
 void cmCommonTargetGenerator::AppendFortranPreprocessFlags(
-  std::string& flags, cmSourceFile const& source)
+  std::string& flags, cmSourceFile const& source,
+  PreprocessFlagsRequired requires_pp)
 {
   const std::string srcpp = source.GetSafeProperty("Fortran_PREPROCESS");
   cmOutputConverter::FortranPreprocess preprocess =
@@ -114,7 +93,9 @@ void cmCommonTargetGenerator::AppendFortranPreprocessFlags(
   const char* var = nullptr;
   switch (preprocess) {
     case cmOutputConverter::FortranPreprocess::Needed:
-      var = "CMAKE_Fortran_COMPILE_OPTIONS_PREPROCESS_ON";
+      if (requires_pp == PreprocessFlagsRequired::YES) {
+        var = "CMAKE_Fortran_COMPILE_OPTIONS_PREPROCESS_ON";
+      }
       break;
     case cmOutputConverter::FortranPreprocess::NotNeeded:
       var = "CMAKE_Fortran_COMPILE_OPTIONS_PREPROCESS_OFF";
@@ -179,7 +160,7 @@ std::string cmCommonTargetGenerator::GetIncludes(std::string const& l,
 }
 
 std::vector<std::string> cmCommonTargetGenerator::GetLinkedTargetDirectories(
-  const std::string& config) const
+  const std::string& lang, const std::string& config) const
 {
   std::vector<std::string> dirs;
   std::set<cmGeneratorTarget const*> emitted;
@@ -194,10 +175,15 @@ std::vector<std::string> cmCommonTargetGenerator::GetLinkedTargetDirectories(
           // Target->GetLinkInformation already processed their
           // link interface and they don't have any output themselves.
           && linkee->GetType() != cmStateEnums::INTERFACE_LIBRARY &&
+          ((lang == "CXX"_s && linkee->HaveCxx20ModuleSources()) ||
+           (lang == "Fortran"_s && linkee->HaveFortranSources(config))) &&
           emitted.insert(linkee).second) {
         cmLocalGenerator* lg = linkee->GetLocalGenerator();
         std::string di = cmStrCat(lg->GetCurrentBinaryDirectory(), '/',
                                   lg->GetTargetDirectory(linkee));
+        if (lg->GetGlobalGenerator()->IsMultiConfig()) {
+          di = cmStrCat(di, '/', config);
+        }
         dirs.push_back(std::move(di));
       }
     }
@@ -317,4 +303,30 @@ std::string cmCommonTargetGenerator::GetLinkerLauncher(
     }
   }
   return std::string();
+}
+
+bool cmCommonTargetGenerator::HaveRequiredLanguages(
+  const std::vector<cmSourceFile const*>& sources,
+  std::set<std::string>& languagesNeeded) const
+{
+  for (cmSourceFile const* sf : sources) {
+    languagesNeeded.insert(sf->GetLanguage());
+  }
+
+  auto* makefile = this->Makefile;
+  auto* state = makefile->GetState();
+  auto unary = [&state, &makefile](const std::string& lang) -> bool {
+    const bool valid = state->GetLanguageEnabled(lang);
+    if (!valid) {
+      makefile->IssueMessage(
+        MessageType::FATAL_ERROR,
+        cmStrCat("The language ", lang,
+                 " was requested for compilation but was not enabled."
+                 " To enable a language it needs to be specified in a"
+                 " 'project' or 'enable_language' command in the root"
+                 " CMakeLists.txt"));
+    }
+    return valid;
+  };
+  return std::all_of(languagesNeeded.cbegin(), languagesNeeded.cend(), unary);
 }

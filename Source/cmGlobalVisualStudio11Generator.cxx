@@ -2,12 +2,18 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmGlobalVisualStudio11Generator.h"
 
+#include <cstring>
+#include <sstream>
 #include <utility>
+#include <vector>
 
-#include "cmAlgorithms.h"
-#include "cmDocumentationEntry.h"
-#include "cmLocalVisualStudio10Generator.h"
+#include "cmGlobalGenerator.h"
+#include "cmGlobalGeneratorFactory.h"
+#include "cmGlobalVisualStudioGenerator.h"
 #include "cmMakefile.h"
+#include "cmMessageType.h"
+#include "cmStringAlgorithms.h"
+#include "cmSystemTools.h"
 
 static const char vs11generatorName[] = "Visual Studio 11 2012";
 
@@ -16,7 +22,7 @@ static const char* cmVS11GenName(const std::string& name, std::string& genName)
 {
   if (strncmp(name.c_str(), vs11generatorName,
               sizeof(vs11generatorName) - 6) != 0) {
-    return 0;
+    return nullptr;
   }
   const char* p = name.c_str() + sizeof(vs11generatorName) - 6;
   if (cmHasLiteralPrefix(p, " 2012")) {
@@ -67,11 +73,11 @@ public:
     return std::unique_ptr<cmGlobalGenerator>(std::move(ret));
   }
 
-  void GetDocumentation(cmDocumentationEntry& entry) const override
+  cmDocumentationEntry GetDocumentation() const override
   {
-    entry.Name = std::string(vs11generatorName) + " [arch]";
-    entry.Brief = "Generates Visual Studio 2012 project files.  "
-                  "Optional [arch] can be \"Win64\" or \"ARM\".";
+    return { std::string(vs11generatorName) + " [arch]",
+             "Deprecated.  Generates Visual Studio 2012 project files.  "
+             "Optional [arch] can be \"Win64\" or \"ARM\"." };
   }
 
   std::vector<std::string> GetGeneratorNames() const override
@@ -141,7 +147,7 @@ cmGlobalVisualStudio11Generator::cmGlobalVisualStudio11Generator(
   this->DefaultLinkFlagTableName = "v11";
   this->DefaultMasmFlagTableName = "v11";
   this->DefaultRCFlagTableName = "v11";
-  this->Version = VS11;
+  this->Version = VSVersion::VS11;
 }
 
 bool cmGlobalVisualStudio11Generator::MatchesGeneratorName(
@@ -152,6 +158,18 @@ bool cmGlobalVisualStudio11Generator::MatchesGeneratorName(
     return genName == this->GetName();
   }
   return false;
+}
+
+void cmGlobalVisualStudio11Generator::EnableLanguage(
+  std::vector<std::string> const& lang, cmMakefile* mf, bool optional)
+{
+  for (std::string const& it : lang) {
+    if (it == "ASM_MARMASM") {
+      this->MarmasmEnabled = true;
+    }
+  }
+  this->AddPlatformDefinitions(mf);
+  cmGlobalVisualStudio10Generator::EnableLanguage(lang, mf, optional);
 }
 
 bool cmGlobalVisualStudio11Generator::InitializeWindowsPhone(cmMakefile* mf)
@@ -198,9 +216,8 @@ bool cmGlobalVisualStudio11Generator::SelectWindowsPhoneToolset(
         this->IsWindowsDesktopToolsetInstalled()) {
       toolset = "v110_wp80";
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   return this->cmGlobalVisualStudio10Generator::SelectWindowsPhoneToolset(
     toolset);
@@ -214,9 +231,8 @@ bool cmGlobalVisualStudio11Generator::SelectWindowsStoreToolset(
         this->IsWindowsDesktopToolsetInstalled()) {
       toolset = "v110";
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   return this->cmGlobalVisualStudio10Generator::SelectWindowsStoreToolset(
     toolset);
@@ -227,6 +243,7 @@ bool cmGlobalVisualStudio11Generator::UseFolderProperty() const
   // Intentionally skip up to the top-level class implementation.
   // Folders are not supported by the Express editions in VS10 and earlier,
   // but they are in VS11 Express and above.
+  // NOLINTNEXTLINE(bugprone-parent-virtual-call)
   return cmGlobalGenerator::UseFolderProperty();
 }
 
