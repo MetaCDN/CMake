@@ -19,8 +19,9 @@
 #include <cm3p/kwiml/int.h>
 
 #include "cmCustomCommandTypes.h"
+#include "cmGeneratorTarget.h"
 #include "cmListFileCache.h"
-#include "cmMessageType.h"
+#include "cmMessageType.h" // IWYU pragma: keep
 #include "cmOutputConverter.h"
 #include "cmPolicies.h"
 #include "cmStateSnapshot.h"
@@ -31,7 +32,6 @@ class cmComputeLinkInformation;
 class cmCustomCommand;
 class cmCustomCommandGenerator;
 class cmCustomCommandLines;
-class cmGeneratorTarget;
 class cmGlobalGenerator;
 class cmImplicitDependsList;
 class cmLinkLineComputer;
@@ -89,7 +89,7 @@ class cmLocalGenerator : public cmOutputConverter
 {
 public:
   cmLocalGenerator(cmGlobalGenerator* gg, cmMakefile* makefile);
-  virtual ~cmLocalGenerator();
+  ~cmLocalGenerator() override;
 
   /**
    * Generate the makefile for this directory.
@@ -137,7 +137,8 @@ public:
     return this->GlobalGenerator;
   }
 
-  virtual cmRulePlaceholderExpander* CreateRulePlaceholderExpander() const;
+  virtual std::unique_ptr<cmRulePlaceholderExpander>
+  CreateRulePlaceholderExpander() const;
 
   std::string GetLinkLibsCMP0065(std::string const& linkLanguage,
                                  cmGeneratorTarget& tgt) const;
@@ -176,6 +177,9 @@ public:
   void AddPchDependencies(cmGeneratorTarget* target);
   void AddUnityBuild(cmGeneratorTarget* target);
   virtual void AddXCConfigSources(cmGeneratorTarget* /* target */) {}
+  void AppendLinkerTypeFlags(std::string& flags, cmGeneratorTarget* target,
+                             const std::string& config,
+                             const std::string& linkLanguage);
   void AppendIPOLinkerFlags(std::string& flags, cmGeneratorTarget* target,
                             const std::string& config,
                             const std::string& lang);
@@ -183,6 +187,12 @@ public:
                                             cmGeneratorTarget* target,
                                             const std::string& config,
                                             const std::string& lang);
+  void AppendDependencyInfoLinkerFlags(std::string& flags,
+                                       cmGeneratorTarget* target,
+                                       const std::string& config,
+                                       const std::string& lang);
+  virtual std::string GetLinkDependencyFile(cmGeneratorTarget* target,
+                                            const std::string& config) const;
   void AppendModuleDefinitionFlag(std::string& flags,
                                   cmGeneratorTarget const* target,
                                   cmLinkLineComputer* linkLineComputer,
@@ -513,6 +523,9 @@ public:
   std::string GetFrameworkFlags(std::string const& l,
                                 std::string const& config,
                                 cmGeneratorTarget* target);
+  std::string GetXcFrameworkFlags(std::string const& l,
+                                  std::string const& config,
+                                  cmGeneratorTarget* target);
   virtual std::string GetTargetFortranFlags(cmGeneratorTarget const* target,
                                             std::string const& config);
 
@@ -532,7 +545,9 @@ public:
   void CreateEvaluationFileOutputs(const std::string& config);
   void ProcessEvaluationFiles(std::vector<std::string>& generatedFiles);
 
-  cmValue GetRuleLauncher(cmGeneratorTarget* target, const std::string& prop);
+  std::string GetRuleLauncher(cmGeneratorTarget* target,
+                              const std::string& prop,
+                              const std::string& config);
 
 protected:
   // The default implementation converts to a Windows shortpath to
@@ -637,7 +652,9 @@ private:
   bool AllAppleArchSysrootsAreTheSame(const std::vector<std::string>& archs,
                                       cmValue sysroot);
 
-  void CopyPchCompilePdb(const std::string& config, cmGeneratorTarget* target,
+  void CopyPchCompilePdb(const std::string& config,
+                         const std::string& language,
+                         cmGeneratorTarget* target,
                          const std::string& ReuseFrom,
                          cmGeneratorTarget* reuseTarget,
                          std::vector<std::string> const& extensions);
@@ -688,12 +705,6 @@ private:
     cmValue beforeInclude, cmValue afterInclude,
     std::string const& filename_base);
 };
-
-#if !defined(CMAKE_BOOTSTRAP)
-bool cmLocalGeneratorCheckObjectName(std::string& objName,
-                                     std::string::size_type dir_len,
-                                     std::string::size_type max_total_len);
-#endif
 
 namespace detail {
 void AddCustomCommandToTarget(cmLocalGenerator& lg, cmCommandOrigin origin,

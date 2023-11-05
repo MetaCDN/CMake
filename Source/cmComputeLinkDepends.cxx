@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <iterator>
 #include <sstream>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -20,11 +21,13 @@
 #include "cmGeneratorExpressionDAGChecker.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
+#include "cmList.h"
 #include "cmListFileCache.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmRange.h"
+#include "cmSourceFile.h"
 #include "cmStateTypes.h"
 #include "cmStringAlgorithms.h"
 #include "cmTarget.h"
@@ -318,6 +321,9 @@ cmComputeLinkDepends::Compute()
   // Follow the link dependencies of the target to be linked.
   this->AddDirectLinkEntries();
 
+  // Add dependencies on targets named by $<TARGET_OBJECTS:...> sources.
+  this->AddTargetObjectEntries();
+
   // Complete the breadth-first search of dependencies.
   while (!this->BFSQueue.empty()) {
     // Get the next entry.
@@ -511,6 +517,7 @@ void cmComputeLinkDepends::AddLinkObject(cmLinkItem const& item)
   LinkEntry& entry = this->EntryList[index];
   entry.Item = BT<std::string>(item.AsStr(), item.Backtrace);
   entry.Kind = LinkEntry::Object;
+  entry.Target = item.Target;
 
   // Record explicitly linked object files separately.
   this->ObjectEntries.emplace_back(index);
@@ -627,7 +634,7 @@ void cmComputeLinkDepends::AddVarLinkEntries(size_t depender_index,
   // This is called to add the dependencies named by
   // <item>_LIB_DEPENDS.  The variable contains a semicolon-separated
   // list.  The list contains link-type;item pairs and just items.
-  std::vector<std::string> deplist = cmExpandedList(value);
+  cmList deplist{ value };
 
   // Look for entries meant for this configuration.
   std::vector<cmLinkItem> actual_libs;
@@ -696,6 +703,21 @@ void cmComputeLinkDepends::AddDirectLinkEntries()
   }
   for (cmLinkItem const& wi : impl->WrongConfigLibraries) {
     this->CheckWrongConfigItem(wi);
+  }
+}
+
+void cmComputeLinkDepends::AddTargetObjectEntries()
+{
+  std::vector<cmSourceFile const*> externalObjects;
+  this->Target->GetExternalObjects(externalObjects, this->Config);
+  for (auto const* externalObject : externalObjects) {
+    std::string const& objLib = externalObject->GetObjectLibrary();
+    if (objLib.empty()) {
+      continue;
+    }
+    cmLinkItem const& objItem =
+      this->Target->ResolveLinkItem(BT<std::string>(objLib));
+    this->AddLinkObject(objItem);
   }
 }
 

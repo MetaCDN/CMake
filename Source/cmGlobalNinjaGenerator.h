@@ -16,7 +16,7 @@
 
 #include <cm/optional>
 
-#include "cm_codecvt.hxx"
+#include "cm_codecvt_Encoding.hxx"
 
 #include "cmBuildOptions.h"
 #include "cmGeneratedFileStream.h"
@@ -77,8 +77,8 @@ public:
   static void WriteDivider(std::ostream& os);
 
   static std::string EncodeRuleName(std::string const& name);
-  std::string EncodeLiteral(const std::string& lit);
-  void EncodeLiteralInplace(std::string& lit);
+  std::string& EncodeLiteral(std::string& lit) override;
+  std::string GetEncodedLiteral(const std::string& lit);
   std::string EncodePath(const std::string& path);
 
   std::unique_ptr<cmLinkLineComputer> CreateLinkLineComputer(
@@ -169,6 +169,7 @@ public:
                            const std::string& comment = "");
 
   bool IsGCCOnWindows() const { return this->UsingGCCOnWindows; }
+  void MarkAsGCCOnWindows() { this->UsingGCCOnWindows = true; }
 
   cmGlobalNinjaGenerator(cmake* cm);
 
@@ -191,7 +192,7 @@ public:
   bool IsNinja() const override { return true; }
 
   /** Get encoding used by generator for ninja files */
-  codecvt::Encoding GetMakefileEncoding() const override;
+  codecvt_Encoding GetMakefileEncoding() const override;
 
   static cmDocumentationEntry GetDocumentation();
 
@@ -234,6 +235,8 @@ public:
   {
     return cmDepfileFormat::GccDepfile;
   }
+
+  bool SupportsLinkerDependencyFile() const override { return true; }
 
   virtual cmGeneratedFileStream* GetImplFileStream(
     const std::string& /*config*/) const
@@ -278,6 +281,10 @@ public:
     }
   };
   MapToNinjaPathImpl MapToNinjaPath() { return { this }; }
+
+#ifdef _WIN32
+  std::string const& GetComspec() const { return this->Comspec; }
+#endif
 
   // -- Additional clean files
   void AddAdditionalCleanFile(std::string fileName, const std::string& config);
@@ -342,6 +349,9 @@ public:
   virtual std::string OrderDependsTargetForTarget(
     cmGeneratorTarget const* target, const std::string& config) const;
 
+  std::string OrderDependsTargetForTargetPrivate(
+    cmGeneratorTarget const* target, const std::string& config) const;
+
   void AppendTargetOutputs(cmGeneratorTarget const* target,
                            cmNinjaDeps& outputs, const std::string& config,
                            cmNinjaTargetDepends depends) const;
@@ -350,15 +360,10 @@ public:
                            const std::string& fileConfig,
                            cmNinjaTargetDepends depends);
   void AppendTargetDependsClosure(cmGeneratorTarget const* target,
-                                  cmNinjaDeps& outputs,
+                                  std::unordered_set<std::string>& outputs,
                                   const std::string& config,
                                   const std::string& fileConfig,
-                                  bool genexOutput);
-  void AppendTargetDependsClosure(cmGeneratorTarget const* target,
-                                  cmNinjaOuts& outputs,
-                                  const std::string& config,
-                                  const std::string& fileConfig,
-                                  bool genexOutput, bool omit_self);
+                                  bool genexOutput, bool omit_self = true);
 
   void AppendDirectoryForConfig(const std::string& prefix,
                                 const std::string& config,
@@ -470,7 +475,7 @@ public:
 
   bool IsSingleConfigUtility(cmGeneratorTarget const* target) const;
 
-  bool CheckCxxModuleSupport() override;
+  bool CheckCxxModuleSupport(CxxModuleSupportQuery query) override;
 
 protected:
   void Generate() override;
@@ -592,7 +597,12 @@ private:
   bool NinjaSupportsMetadataOnRegeneration = false;
   bool NinjaSupportsCodePage = false;
 
-  codecvt::Encoding NinjaExpectedEncoding = codecvt::None;
+  codecvt_Encoding NinjaExpectedEncoding = codecvt_Encoding::None;
+
+#ifdef _WIN32
+  // Windows Command shell.
+  std::string Comspec;
+#endif
 
   bool DiagnosedCxxModuleNinjaSupport = false;
 
@@ -601,7 +611,6 @@ private:
   std::string OutputPathPrefix;
   std::string TargetAll;
   std::string CMakeCacheFile;
-  bool DisableCleandead = false;
 
   struct ByConfig
   {
@@ -617,7 +626,8 @@ private:
       bool GenexOutput;
     };
 
-    std::map<TargetDependsClosureKey, cmNinjaOuts> TargetDependsClosures;
+    std::map<TargetDependsClosureKey, std::unordered_set<std::string>>
+      TargetDependsClosures;
 
     TargetAliasMap TargetAliases;
 

@@ -27,6 +27,7 @@
 #include "cmCryptoHash.h"
 #include "cmFileTime.h"
 #include "cmGccDepfileReader.h"
+#include "cmGccDepfileReaderTypes.h"
 #include "cmGeneratedFileStream.h"
 #include "cmQtAutoGen.h"
 #include "cmQtAutoGenerator.h"
@@ -189,7 +190,7 @@ public:
   {
   public:
     // -- Parse Cache
-    std::atomic<bool> ParseCacheChanged = ATOMIC_VAR_INIT(false);
+    std::atomic<bool> ParseCacheChanged{ false };
     cmFileTime ParseCacheTime;
     ParseCacheT ParseCache;
 
@@ -582,7 +583,7 @@ private:
   std::string SettingsStringMoc_;
   std::string SettingsStringUic_;
   // -- Worker thread pool
-  std::atomic<bool> JobError_ = ATOMIC_VAR_INIT(false);
+  std::atomic<bool> JobError_{ false };
   cmWorkerPool WorkerPool_;
   // -- Concurrent processing
   mutable std::mutex CMakeLibMutex_;
@@ -2116,7 +2117,7 @@ void cmQtAutoMocUicT::JobCompileMocT::MaybeWriteMocResponseFile(
     cmd.resize(1);
 
     // Specify response file
-    cmd.push_back(cmStrCat('@', responseFile));
+    cmd.emplace_back(cmStrCat('@', responseFile));
   }
 #else
   static_cast<void>(outputFile);
@@ -2272,10 +2273,9 @@ cmQtAutoMocUicT::JobDepFilesMergeT::initialDependencies() const
 void cmQtAutoMocUicT::JobDepFilesMergeT::Process()
 {
   if (this->Log().Verbose()) {
-    this->Log().Info(
-      GenT::MOC,
-      cmStrCat("Merging MOC dependencies into ",
-               this->MessagePath(this->BaseConst().DepFile.c_str())));
+    this->Log().Info(GenT::MOC,
+                     cmStrCat("Merging MOC dependencies into ",
+                              this->MessagePath(this->BaseConst().DepFile)));
   }
   auto processDepFile =
     [this](const std::string& mocOutputFile) -> std::vector<std::string> {

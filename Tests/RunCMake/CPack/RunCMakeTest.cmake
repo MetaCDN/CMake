@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 
 include(RunCMake)
 include("${RunCMake_SOURCE_DIR}/CPackTestHelpers.cmake")
@@ -69,3 +69,4 @@ run_cpack_test_subtests(
 )
 run_cpack_test(PROJECT_META "RPM.PROJECT_META;DEB.PROJECT_META" false "MONOLITHIC;COMPONENT")
 run_cpack_test_package_target(PRE_POST_SCRIPTS "ZIP" false "MONOLITHIC;COMPONENT")
+run_cpack_test_subtests(DUPLICATE_FILE "success;conflict_file;conflict_symlink" "TGZ" false "COMPONENT;GROUP")

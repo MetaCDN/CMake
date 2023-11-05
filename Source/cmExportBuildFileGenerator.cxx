@@ -19,6 +19,7 @@
 #include "cmGeneratorExpression.h"
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
+#include "cmList.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
@@ -106,6 +107,9 @@ bool cmExportBuildFileGenerator::GenerateMainFile(std::ostream& os)
     this->PopulateInterfaceProperty("INTERFACE_AUTOUIC_OPTIONS", gte,
                                     cmGeneratorExpression::BuildInterface,
                                     properties);
+    this->PopulateInterfaceProperty("INTERFACE_AUTOMOC_MACRO_NAMES", gte,
+                                    cmGeneratorExpression::BuildInterface,
+                                    properties);
     this->PopulateInterfaceProperty("INTERFACE_COMPILE_FEATURES", gte,
                                     cmGeneratorExpression::BuildInterface,
                                     properties);
@@ -122,6 +126,15 @@ bool cmExportBuildFileGenerator::GenerateMainFile(std::ostream& os)
                                     properties);
 
     std::string errorMessage;
+    if (!this->PopulateCxxModuleExportProperties(
+          gte, properties, cmGeneratorExpression::BuildInterface, {},
+          errorMessage)) {
+      this->LG->GetGlobalGenerator()->GetCMakeInstance()->IssueMessage(
+        MessageType::FATAL_ERROR, errorMessage,
+        this->LG->GetMakefile()->GetBacktrace());
+      return false;
+    }
+
     if (!this->PopulateExportProperties(gte, properties, errorMessage)) {
       this->LG->GetGlobalGenerator()->GetCMakeInstance()->IssueMessage(
         MessageType::FATAL_ERROR, errorMessage,
@@ -234,7 +247,7 @@ void cmExportBuildFileGenerator::SetImportLocationProperty(
     }
 
     // Store the property.
-    properties[prop] = cmJoin(objects, ";");
+    properties[prop] = cmList::to_string(objects);
   } else {
     // Add the main target file.
     {
@@ -254,7 +267,7 @@ void cmExportBuildFileGenerator::SetImportLocationProperty(
     if (target->HasImportLibrary(config)) {
       std::string prop = cmStrCat("IMPORTED_IMPLIB", suffix);
       std::string value =
-        target->GetFullPath(config, cmStateEnums::ImportLibraryArtifact);
+        target->GetFullPath(config, cmStateEnums::ImportLibraryArtifact, true);
       if (mf->GetDefinition("CMAKE_IMPORT_LIBRARY_SUFFIX")) {
         target->GetImplibGNUtoMS(config, value, value,
                                  "${CMAKE_IMPORT_LIBRARY_SUFFIX}");
@@ -396,8 +409,7 @@ std::string cmExportBuildFileGenerator::GetFileSetDirectories(
     auto const& type = fileSet->GetType();
     // C++ modules do not support interface file sets which are dependent upon
     // the configuration.
-    if (contextSensitive &&
-        (type == "CXX_MODULES"_s || type == "CXX_MODULE_HEADER_UNITS"_s)) {
+    if (contextSensitive && type == "CXX_MODULES"_s) {
       auto* mf = this->LG->GetMakefile();
       std::ostringstream e;
       e << "The \"" << gte->GetName() << "\" target's interface file set \""
@@ -416,7 +428,7 @@ std::string cmExportBuildFileGenerator::GetFileSetDirectories(
         resultVector.push_back(
           cmStrCat("\"$<$<CONFIG:", config, ">:", dest, ">\""));
       } else {
-        resultVector.push_back(cmStrCat('"', dest, '"'));
+        resultVector.emplace_back(cmStrCat('"', dest, '"'));
         break;
       }
     }
@@ -456,8 +468,7 @@ std::string cmExportBuildFileGenerator::GetFileSetFiles(cmGeneratorTarget* gte,
     auto const& type = fileSet->GetType();
     // C++ modules do not support interface file sets which are dependent upon
     // the configuration.
-    if (contextSensitive &&
-        (type == "CXX_MODULES"_s || type == "CXX_MODULE_HEADER_UNITS"_s)) {
+    if (contextSensitive && type == "CXX_MODULES"_s) {
       auto* mf = this->LG->GetMakefile();
       std::ostringstream e;
       e << "The \"" << gte->GetName() << "\" target's interface file set \""
@@ -476,7 +487,7 @@ std::string cmExportBuildFileGenerator::GetFileSetFiles(cmGeneratorTarget* gte,
           resultVector.push_back(
             cmStrCat("\"$<$<CONFIG:", config, ">:", escapedFile, ">\""));
         } else {
-          resultVector.push_back(cmStrCat('"', escapedFile, '"'));
+          resultVector.emplace_back(cmStrCat('"', escapedFile, '"'));
         }
       }
     }
@@ -539,6 +550,12 @@ bool cmExportBuildFileGenerator::GenerateImportCxxModuleConfigTargetInclusion(
   os.SetCopyIfDifferent(true);
 
   for (auto const* tgt : this->ExportedTargets) {
+    // Only targets with C++ module sources will have a
+    // collator-generated install script.
+    if (!tgt->HaveCxx20ModuleSources()) {
+      continue;
+    }
+
     os << "include(\"${CMAKE_CURRENT_LIST_DIR}/target-" << tgt->GetExportName()
        << '-' << config << ".cmake\")\n";
   }

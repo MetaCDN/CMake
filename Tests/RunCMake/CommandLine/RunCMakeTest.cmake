@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.5)
 
 include(RunCMake)
 
@@ -124,6 +124,17 @@ run_cmake_command(cache-bad-entry
   ${CMAKE_COMMAND} --build ${RunCMake_SOURCE_DIR}/cache-bad-entry/)
 run_cmake_command(cache-empty-entry
   ${CMAKE_COMMAND} --build ${RunCMake_SOURCE_DIR}/cache-empty-entry/)
+
+run_cmake_command(DebuggerCapabilityInspect ${CMAKE_COMMAND} -E capabilities)
+get_property(CMake_ENABLE_DEBUGGER DIRECTORY PROPERTY CMake_ENABLE_DEBUGGER)
+if(CMake_ENABLE_DEBUGGER)
+  run_cmake_with_options(DebuggerArgMissingPipe --debugger-pipe)
+  run_cmake_with_options(DebuggerArgMissingDapLog --debugger-dap-log)
+else()
+  run_cmake_with_options(DebuggerNotSupported --debugger)
+  run_cmake_with_options(DebuggerNotSupportedPipe --debugger-pipe pipe)
+  run_cmake_with_options(DebuggerNotSupportedDapLog --debugger-dap-log dap-log)
+endif()
 
 function(run_ExplicitDirs)
   set(RunCMake_TEST_NO_CLEAN 1)
@@ -780,6 +791,7 @@ run_cmake_command(E_env-no-command1 ${CMAKE_COMMAND} -E env TEST_ENV=1)
 run_cmake_command(E_env-bad-arg1 ${CMAKE_COMMAND} -E env -bad-arg1)
 run_cmake_command(E_env-set   ${CMAKE_COMMAND} -E env TEST_ENV=1 ${CMAKE_COMMAND} -P ${RunCMake_SOURCE_DIR}/E_env-set.cmake)
 run_cmake_command(E_env-unset ${CMAKE_COMMAND} -E env TEST_ENV=1 ${CMAKE_COMMAND} -E env --unset=TEST_ENV ${CMAKE_COMMAND} -P ${RunCMake_SOURCE_DIR}/E_env-unset.cmake)
+run_cmake_command(E_env-stdin ${CMAKE_COMMAND} -DPRINT_STDIN_EXE=${PRINT_STDIN_EXE} -P ${RunCMake_SOURCE_DIR}/E_env-stdin.cmake)
 
 # To test whether the double dash (--) works for the env command, we need a command that e.g. contains an equals sign (=)
 # and would normally be interpreted as an NAME=VALUE environment variable.
@@ -1101,9 +1113,18 @@ set(RunCMake_TEST_OPTIONS --profiling-format=google-trace --profiling-output=${P
 run_cmake(ProfilingTest)
 unset(RunCMake_TEST_OPTIONS)
 
-if(RunCMake_GENERATOR MATCHES "^Visual Studio 11 2012")
-  run_cmake_with_options(DeprecateVS11-WARN-ON -DCMAKE_WARN_VS11=ON)
-  unset(ENV{CMAKE_WARN_VS11})
-  run_cmake(DeprecateVS11-WARN-ON)
-  run_cmake_with_options(DeprecateVS11-WARN-OFF -DCMAKE_WARN_VS11=OFF)
+if(RunCMake_GENERATOR MATCHES "^Visual Studio 9 2008")
+  run_cmake_with_options(DeprecateVS9-WARN-ON -DCMAKE_WARN_VS9=ON)
+  unset(ENV{CMAKE_WARN_VS9})
+  run_cmake(DeprecateVS9-WARN-ON)
+  run_cmake_with_options(DeprecateVS9-WARN-OFF -DCMAKE_WARN_VS9=OFF)
 endif()
+
+if(RunCMake_GENERATOR MATCHES "^Visual Studio 12 2013")
+  run_cmake_with_options(DeprecateVS12-WARN-ON -DCMAKE_WARN_VS12=ON)
+  unset(ENV{CMAKE_WARN_VS12})
+  run_cmake(DeprecateVS12-WARN-ON)
+  run_cmake_with_options(DeprecateVS12-WARN-OFF -DCMAKE_WARN_VS12=OFF)
+endif()
+
+run_cmake_with_options(help-arbitrary "--help" "CMAKE_CXX_IGNORE_EXTENSIONS")
