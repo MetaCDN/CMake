@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include <cm/optional>
 #include <cm/string_view>
 
 #include "cmDuration.h"
@@ -116,8 +117,8 @@ public:
   cmDuration GetGlobalTimeout() const;
 
   /** how many test to run at the same time */
-  int GetParallelLevel() const;
-  void SetParallelLevel(int);
+  cm::optional<size_t> GetParallelLevel() const;
+  void SetParallelLevel(cm::optional<size_t> level);
 
   unsigned long GetTestLoad() const;
   void SetTestLoad(unsigned long);
@@ -511,7 +512,7 @@ private:
   static bool ColoredOutputSupportedByConsole();
 
   /** handle the -S -SP and -SR arguments */
-  void HandleScriptArguments(size_t& i, std::vector<std::string>& args,
+  bool HandleScriptArguments(size_t& i, std::vector<std::string>& args,
                              bool& SRArgumentSpecified);
 
   /** Reread the configuration file */
@@ -530,11 +531,13 @@ private:
 
   /** Handle the --test-action command line argument */
   bool HandleTestActionArgument(const char* ctestExec, size_t& i,
-                                const std::vector<std::string>& args);
+                                const std::vector<std::string>& args,
+                                bool& validArg);
 
   /** Handle the --test-model command line argument */
   bool HandleTestModelArgument(const char* ctestExec, size_t& i,
-                               const std::vector<std::string>& args);
+                               const std::vector<std::string>& args,
+                               bool& validArg);
 
   int RunCMakeAndTest(std::string* output);
   int ExecuteTests();

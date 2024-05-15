@@ -629,13 +629,11 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
     // now create a CMakeLists.txt file in that directory
     FILE* fout = cmsys::SystemTools::Fopen(outFileName, "w");
     if (!fout) {
-      std::ostringstream e;
-      /* clang-format off */
-      e << "Failed to open\n"
-           "  " << outFileName << "\n"
-        << cmSystemTools::GetLastSystemError();
-      /* clang-format on */
-      this->Makefile->IssueMessage(MessageType::FATAL_ERROR, e.str());
+      this->Makefile->IssueMessage(
+        MessageType::FATAL_ERROR,
+        cmStrCat("Failed to open\n"
+                 "  ",
+                 outFileName, '\n', cmSystemTools::GetLastSystemError()));
       return cm::nullopt;
     }
 
@@ -904,6 +902,14 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
               ? "NEW"
               : "OLD");
 
+    /* Set the appropriate policy information for Swift compilation mode */
+    fprintf(
+      fout, "cmake_policy(SET CMP0157 %s)\n",
+      this->Makefile->GetDefinition("CMAKE_Swift_COMPILATION_MODE_DEFAULT")
+          .IsEmpty()
+        ? "OLD"
+        : "NEW");
+
     // Workaround for -Wl,-headerpad_max_install_names issue until we can avoid
     // adding that flag in the platform and compiler language files
     fprintf(fout,
@@ -1145,6 +1151,7 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
     vars.emplace("CMAKE_WATCOM_RUNTIME_LIBRARY"_s);
     vars.emplace("CMAKE_MSVC_DEBUG_INFORMATION_FORMAT"_s);
     vars.emplace("CMAKE_CXX_COMPILER_CLANG_SCAN_DEPS"_s);
+    vars.emplace("CMAKE_VS_USE_DEBUG_LIBRARIES"_s);
 
     if (cmValue varListStr = this->Makefile->GetDefinition(
           kCMAKE_TRY_COMPILE_PLATFORM_VARIABLES)) {
@@ -1157,7 +1164,7 @@ cm::optional<cmTryCompileResult> cmCoreTryCompile::TryCompileCode(
       vars.insert(kCMAKE_LINKER_TYPE);
       auto defs = this->Makefile->GetDefinitions();
       cmsys::RegularExpression linkerTypeDef{
-        "^CMAKE_[A-Za-z]+_USING_LINKER_"
+        "^CMAKE_[A-Za-z_-]+_USING_LINKER_"
       };
       for (auto const& def : defs) {
         if (linkerTypeDef.find(def)) {

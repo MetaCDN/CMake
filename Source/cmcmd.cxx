@@ -11,8 +11,6 @@
 #include <cm3p/uv.h>
 #include <fcntl.h>
 
-#include "cm_fileno.hxx"
-
 #include "cmCommandLineArgument.h"
 #include "cmConsoleBuf.h"
 #include "cmCryptoHash.h"
@@ -203,11 +201,16 @@ bool cmTarFilesFrom(std::string const& file, std::vector<std::string>& files)
 void cmCatFile(const std::string& fileToAppend)
 {
 #ifdef _WIN32
+  _setmode(fileno(stdin), _O_BINARY);
   _setmode(fileno(stdout), _O_BINARY);
 #endif
-  cmsys::ifstream source(fileToAppend.c_str(),
-                         (std::ios::binary | std::ios::in));
-  std::cout << source.rdbuf();
+  std::streambuf* buf = std::cin.rdbuf();
+  cmsys::ifstream source;
+  if (fileToAppend != "-") {
+    source.open(fileToAppend.c_str(), (std::ios::binary | std::ios::in));
+    buf = source.rdbuf();
+  }
+  std::cout << buf;
 }
 
 bool cmRemoveDirectory(const std::string& dir, bool recursive = true)
@@ -1147,7 +1150,12 @@ int cmcmd::ExecuteCMakeCommand(std::vector<std::string> const& args,
       int return_value = 0;
       bool doing_options = true;
       for (auto const& arg : cmMakeRange(args).advance(2)) {
-        if (doing_options && cmHasLiteralPrefix(arg, "-")) {
+        if (arg == "-") {
+          doing_options = false;
+          // Destroy console buffers to drop cout/cerr encoding transform.
+          consoleBuf.reset();
+          cmCatFile(arg);
+        } else if (doing_options && cmHasLiteralPrefix(arg, "-")) {
           if (arg == "--") {
             doing_options = false;
           } else {
@@ -1433,13 +1441,17 @@ int cmcmd::ExecuteCMakeCommand(std::vector<std::string> const& args,
     if ((args[1] == "cmake_autogen") && (args.size() >= 4)) {
       cm::string_view const infoFile = args[2];
       cm::string_view const config = args[3];
-      return cmQtAutoMocUic(infoFile, config) ? 0 : 1;
+      cm::string_view const executableConfig =
+        (args.size() >= 5) ? cm::string_view(args[4]) : cm::string_view();
+      return cmQtAutoMocUic(infoFile, config, executableConfig) ? 0 : 1;
     }
     if ((args[1] == "cmake_autorcc") && (args.size() >= 3)) {
       cm::string_view const infoFile = args[2];
       cm::string_view const config =
         (args.size() > 3) ? cm::string_view(args[3]) : cm::string_view();
-      return cmQtAutoRcc(infoFile, config) ? 0 : 1;
+      cm::string_view const executableConfig =
+        (args.size() >= 5) ? cm::string_view(args[4]) : cm::string_view();
+      return cmQtAutoRcc(infoFile, config, executableConfig) ? 0 : 1;
     }
 #endif
 
@@ -1903,11 +1915,8 @@ int cmcmd::ExecuteLinkScript(std::vector<std::string> const& args)
     cmUVProcessChainBuilder builder;
 
     // Children should share stdout and stderr with this process.
-    builder
-      .SetExternalStream(cmUVProcessChainBuilder::Stream_OUTPUT,
-                         cm_fileno(stdout))
-      .SetExternalStream(cmUVProcessChainBuilder::Stream_ERROR,
-                         cm_fileno(stderr));
+    builder.SetExternalStream(cmUVProcessChainBuilder::Stream_OUTPUT, stdout)
+      .SetExternalStream(cmUVProcessChainBuilder::Stream_ERROR, stderr);
 
     // Setup this command line.
     std::vector<std::string> args2;

@@ -84,8 +84,8 @@ The options are:
   .. versionadded:: 3.20
     Arguments to ``BYPRODUCTS`` may use a restricted set of
     :manual:`generator expressions <cmake-generator-expressions(7)>`.
-    :ref:`Target-dependent expressions <Target-Dependent Queries>` are not
-    permitted.
+    :ref:`Target-dependent expressions <Target-Dependent Expressions>`
+    are not permitted.
 
   .. versionchanged:: 3.28
     In targets using :ref:`file sets`, custom command byproducts are now
@@ -272,8 +272,8 @@ The options are:
   .. versionadded:: 3.20
     Arguments to ``OUTPUT`` may use a restricted set of
     :manual:`generator expressions <cmake-generator-expressions(7)>`.
-    :ref:`Target-dependent expressions <Target-Dependent Queries>` are not
-    permitted.
+    :ref:`Target-dependent expressions <Target-Dependent Expressions>`
+    are not permitted.
 
   .. versionchanged:: 3.28
     In targets using :ref:`file sets`, custom command outputs are now
@@ -372,6 +372,11 @@ The options are:
     and for the :generator:`Xcode` generator.  Support for
     :manual:`generator expressions <cmake-generator-expressions(7)>` was also
     added.
+
+  .. versionadded:: 3.29
+    The :ref:`Ninja Generators` will now incorporate the dependencies into its
+    "deps log" database if the file is not listed in ``OUTPUTS`` or
+    ``BYPRODUCTS``.
 
   Using ``DEPFILE`` with generators other than those listed above is an error.
 
@@ -544,10 +549,13 @@ one of the keywords to make clear the behavior they expect.
   lines or custom commands will be omitted for the specific
   configuration and no "empty-string-command" will be added.
 
-  This allows to add individual build events for every configuration.
+  This allows adding individual build events for every configuration.
 
 .. versionadded:: 3.21
   Support for target-dependent generator expressions.
+
+.. versionadded:: 3.29
+  The ``<target>`` may be an :ref:`ALIAS target <Alias Targets>`.
 
 Examples: Build Events
 ^^^^^^^^^^^^^^^^^^^^^^

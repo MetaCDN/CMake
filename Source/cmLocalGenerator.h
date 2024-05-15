@@ -67,6 +67,15 @@ enum class cmBuildStep
   Link
 };
 
+/** What compilation mode the swift files are in */
+enum class cmSwiftCompileMode
+{
+  Wholemodule,
+  Incremental,
+  Singlefile,
+  Unknown,
+};
+
 /** Target and source file which have a specific output.  */
 struct cmSourcesWithOutput
 {
@@ -548,6 +557,14 @@ public:
   std::string GetRuleLauncher(cmGeneratorTarget* target,
                               const std::string& prop,
                               const std::string& config);
+
+  // Return Swift_COMPILATION_MODE value if CMP0157 is NEW.
+  cm::optional<cmSwiftCompileMode> GetSwiftCompileMode(
+    cmGeneratorTarget const* target, std::string const& config);
+
+  // Can we build Swift with a separate object build and link step
+  // (If CMP0157 is NEW, we can do a split build)
+  bool IsSplitSwiftBuild() const;
 
 protected:
   // The default implementation converts to a Windows shortpath to

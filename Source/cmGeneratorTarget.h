@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <cm/optional>
+#include <cm/string_view>
 
 #include "cmAlgorithms.h"
 #include "cmComputeLinkInformation.h"
@@ -58,6 +59,7 @@ public:
   bool IsImported() const;
   bool IsImportedGloballyVisible() const;
   bool CanCompileSources() const;
+  bool HasKnownRuntimeArtifactLocation(std::string const& config) const;
   const std::string& GetLocation(const std::string& config) const;
 
   /** Get the full path to the target's main artifact, if known.  */
@@ -98,6 +100,7 @@ public:
   cmStateEnums::TargetType GetType() const;
   const std::string& GetName() const;
   std::string GetExportName() const;
+  std::string GetFilesystemExportName() const;
 
   std::vector<std::string> GetPropertyKeys() const;
   //! Might return a nullptr if the property is not set or invalid
@@ -255,20 +258,20 @@ public:
                             cmOptionalLinkInterface& iface,
                             const cmGeneratorTarget* head) const;
 
-  enum class LinkInterfaceFor
+  enum class UseTo
   {
-    Usage, // Interface for usage requirements excludes $<LINK_ONLY>.
-    Link,  // Interface for linking includes $<LINK_ONLY>.
+    Compile, // Usage requirements for compiling.  Excludes $<LINK_ONLY>.
+    Link,    // Usage requirements for linking.  Includes $<LINK_ONLY>.
   };
 
   cmLinkInterfaceLibraries const* GetLinkInterfaceLibraries(
     const std::string& config, const cmGeneratorTarget* headTarget,
-    LinkInterfaceFor interfaceFor) const;
+    UseTo usage) const;
 
   void ComputeLinkInterfaceLibraries(const std::string& config,
                                      cmOptionalLinkInterface& iface,
                                      const cmGeneratorTarget* head,
-                                     LinkInterfaceFor interfaceFor) const;
+                                     UseTo usage) const;
 
   /** Get the library name for an imported interface library.  */
   std::string GetImportedLibName(std::string const& config) const;
@@ -426,19 +429,19 @@ public:
 
   LinkClosure const* GetLinkClosure(const std::string& config) const;
 
-  cmLinkImplementation const* GetLinkImplementation(
-    const std::string& config, LinkInterfaceFor implFor) const;
+  cmLinkImplementation const* GetLinkImplementation(const std::string& config,
+                                                    UseTo usage) const;
 
   void ComputeLinkImplementationLanguages(
     const std::string& config, cmOptionalLinkImplementation& impl) const;
 
   cmLinkImplementationLibraries const* GetLinkImplementationLibraries(
-    const std::string& config, LinkInterfaceFor implFor) const;
+    const std::string& config, UseTo usage) const;
 
   void ComputeLinkImplementationLibraries(const std::string& config,
                                           cmOptionalLinkImplementation& impl,
                                           const cmGeneratorTarget* head,
-                                          LinkInterfaceFor implFor) const;
+                                          UseTo usage) const;
 
   struct TargetOrString
   {
@@ -449,9 +452,12 @@ public:
   TargetOrString ResolveTargetReference(std::string const& name,
                                         cmLocalGenerator const* lg) const;
 
-  cmLinkItem ResolveLinkItem(BT<std::string> const& name) const;
-  cmLinkItem ResolveLinkItem(BT<std::string> const& name,
-                             cmLocalGenerator const* lg) const;
+  cmLinkItem ResolveLinkItem(
+    BT<std::string> const& name,
+    std::string const& linkFeature = cmLinkItem::DEFAULT) const;
+  cmLinkItem ResolveLinkItem(
+    BT<std::string> const& name, cmLocalGenerator const* lg,
+    std::string const& linkFeature = cmLinkItem::DEFAULT) const;
 
   bool HasPackageReferences() const;
   std::vector<std::string> GetPackageReferences() const;
@@ -465,6 +471,11 @@ public:
                     std::string const& config) const;
   bool IsLanguageUsed(std::string const& language,
                       std::string const& config) const;
+
+  // Get the set of targets directly referenced via `TARGET_OBJECTS` in the
+  // source list for a configuration.
+  std::set<cmGeneratorTarget const*> GetSourceObjectLibraries(
+    std::string const& config) const;
 
   bool IsCSharpOnly() const;
 
@@ -588,6 +599,8 @@ public:
   std::vector<BT<std::string>> GetPrecompileHeaders(
     const std::string& config, const std::string& language) const;
 
+  std::vector<std::string> GetPchArchs(std::string const& config,
+                                       std::string const& lang) const;
   std::string GetPchHeader(const std::string& config,
                            const std::string& language,
                            const std::string& arch = std::string()) const;
@@ -718,7 +731,10 @@ public:
    */
   void ClearSourcesCache();
 
-  // Do not use.  This is only for a specific call site with a FIXME comment.
+  /**
+   * Clears cached evaluations of INTERFACE_LINK_LIBRARIES.
+   * They will be recomputed on demand.
+   */
   void ClearLinkInterfaceCache();
 
   void AddSource(const std::string& src, bool before = false);
@@ -796,6 +812,9 @@ public:
   std::string GetLinkerTool(const std::string& lang,
                             const std::string& config) const;
 
+  /** Is the linker known to enforce '--no-allow-shlib-undefined'? */
+  bool LinkerEnforcesNoAllowShLibUndefined(std::string const& config) const;
+
   /** Does this target have a GNU implib to convert to MS format?  */
   bool HasImplibGNUtoMS(std::string const& config) const;
 
@@ -867,8 +886,19 @@ public:
 
   std::string EvaluateInterfaceProperty(
     std::string const& prop, cmGeneratorExpressionContext* context,
-    cmGeneratorExpressionDAGChecker* dagCheckerParent,
-    LinkInterfaceFor interfaceFor = LinkInterfaceFor::Usage) const;
+    cmGeneratorExpressionDAGChecker* dagCheckerParent, UseTo usage) const;
+
+  struct TransitiveProperty
+  {
+    cm::string_view InterfaceName;
+    UseTo Usage;
+  };
+
+  static const std::map<cm::string_view, TransitiveProperty>
+    BuiltinTransitiveProperties;
+
+  cm::optional<TransitiveProperty> IsTransitiveProperty(
+    cm::string_view prop, cmLocalGenerator const* lg) const;
 
   bool HaveInstallTreeRPATH(const std::string& config) const;
 
@@ -946,6 +976,7 @@ public:
 
   std::string GetImportedXcFrameworkPath(const std::string& config) const;
 
+  bool ApplyCXXStdTargets();
   bool DiscoverSyntheticTargets(cmSyntheticTargetCache& cache,
                                 std::string const& config);
 
@@ -1070,7 +1101,7 @@ private:
                             const cmGeneratorTarget* head,
                             bool secondPass) const;
   cmLinkImplementation const* GetLinkImplementation(const std::string& config,
-                                                    LinkInterfaceFor implFor,
+                                                    UseTo usage,
                                                     bool secondPass) const;
 
   enum class LinkItemRole
@@ -1099,7 +1130,6 @@ private:
     std::string SharedDeps;
   };
 
-  friend cmComputeLinkInformation;
   using ImportInfoMapType = std::map<std::string, ImportInfo>;
   mutable ImportInfoMapType ImportInfoMap;
   void ComputeImportInfo(std::string const& desired_config,
@@ -1112,7 +1142,7 @@ private:
 
   cmLinkInterface const* GetImportLinkInterface(const std::string& config,
                                                 const cmGeneratorTarget* head,
-                                                LinkInterfaceFor interfaceFor,
+                                                UseTo usage,
                                                 bool secondPass = false) const;
 
   using KindedSourcesMapType = std::map<std::string, KindedSources>;
@@ -1126,7 +1156,7 @@ private:
   mutable std::unordered_map<std::string, bool> MaybeInterfacePropertyExists;
   bool MaybeHaveInterfaceProperty(std::string const& prop,
                                   cmGeneratorExpressionContext* context,
-                                  LinkInterfaceFor interfaceFor) const;
+                                  UseTo usage) const;
 
   using TargetPropertyEntryVector =
     std::vector<std::unique_ptr<TargetPropertyEntry>>;
@@ -1162,9 +1192,8 @@ private:
   };
   void ExpandLinkItems(std::string const& prop, cmBTStringRange entries,
                        std::string const& config,
-                       const cmGeneratorTarget* headTarget,
-                       LinkInterfaceFor interfaceFor, LinkInterfaceField field,
-                       cmLinkInterface& iface) const;
+                       const cmGeneratorTarget* headTarget, UseTo usage,
+                       LinkInterfaceField field, cmLinkInterface& iface) const;
 
   struct LookupLinkItemScope
   {
@@ -1177,6 +1206,7 @@ private:
   };
   cm::optional<cmLinkItem> LookupLinkItem(std::string const& n,
                                           cmListFileBacktrace const& bt,
+                                          std::string const& linkFeature,
                                           LookupLinkItemScope* scope,
                                           LookupSelf lookupSelf) const;
 
@@ -1202,7 +1232,7 @@ private:
 
   cmLinkImplementationLibraries const* GetLinkImplementationLibrariesInternal(
     const std::string& config, const cmGeneratorTarget* head,
-    LinkInterfaceFor implFor) const;
+    UseTo usage) const;
   bool ComputeOutputDir(const std::string& config,
                         cmStateEnums::ArtifactType artifact,
                         std::string& out) const;
@@ -1325,6 +1355,13 @@ public:
                                        cmSourceFile const* sf) const;
   bool NeedDyndepForSource(std::string const& lang, std::string const& config,
                            cmSourceFile const* sf) const;
+  enum class CxxModuleSupport
+  {
+    Unavailable,
+    Enabled,
+    Disabled,
+  };
+  CxxModuleSupport NeedCxxDyndep(std::string const& config) const;
 
 private:
   void BuildFileSetInfoCache(std::string const& config) const;

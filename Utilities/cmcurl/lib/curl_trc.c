@@ -36,6 +36,7 @@
 
 #include "cf-socket.h"
 #include "connect.h"
+#include "doh.h"
 #include "http2.h"
 #include "http_proxy.h"
 #include "cf-h1-proxy.h"
@@ -61,10 +62,6 @@ void Curl_debug(struct Curl_easy *data, curl_infotype type,
       "* ", "< ", "> ", "{ ", "} ", "{ ", "} " };
     if(data->set.fdebug) {
       bool inCallback = Curl_is_in_callback(data);
-      /* CURLOPT_DEBUGFUNCTION doc says the user may set CURLOPT_PRIVATE to
-         distinguish their handle from internal handles. */
-      if(data->internal)
-        DEBUGASSERT(!data->set.private_data);
       Curl_set_in_callback(data, true);
       (void)(*data->set.fdebug)(data, type, ptr, size, data->set.debugdata);
       Curl_set_in_callback(data, inCallback);
@@ -109,36 +106,20 @@ void Curl_failf(struct Curl_easy *data, const char *fmt, ...)
   }
 }
 
+#if !defined(CURL_DISABLE_VERBOSE_STRINGS)
+
 /* Curl_infof() is for info message along the way */
 #define MAXINFO 2048
 
 void Curl_infof(struct Curl_easy *data, const char *fmt, ...)
 {
   DEBUGASSERT(!strchr(fmt, '\n'));
-  if(data && data->set.verbose) {
+  if(Curl_trc_is_verbose(data)) {
     va_list ap;
-    int len;
+    int len = 0;
     char buffer[MAXINFO + 2];
-    va_start(ap, fmt);
-    len = mvsnprintf(buffer, MAXINFO, fmt, ap);
-    va_end(ap);
-    buffer[len++] = '\n';
-    buffer[len] = '\0';
-    Curl_debug(data, CURLINFO_TEXT, buffer, len);
-  }
-}
-
-#if !defined(CURL_DISABLE_VERBOSE_STRINGS)
-
-void Curl_trc_cf_infof(struct Curl_easy *data, struct Curl_cfilter *cf,
-                       const char *fmt, ...)
-{
-  DEBUGASSERT(cf);
-  if(data && Curl_trc_cf_is_verbose(cf, data)) {
-    va_list ap;
-    int len;
-    char buffer[MAXINFO + 2];
-    len = msnprintf(buffer, MAXINFO, "[%s] ", cf->cft->name);
+    if(data->state.feat)
+      len = msnprintf(buffer, MAXINFO, "[%s] ", data->state.feat->name);
     va_start(ap, fmt);
     len += mvsnprintf(buffer + len, MAXINFO - len, fmt, ap);
     va_end(ap);
@@ -148,6 +129,37 @@ void Curl_trc_cf_infof(struct Curl_easy *data, struct Curl_cfilter *cf,
   }
 }
 
+void Curl_trc_cf_infof(struct Curl_easy *data, struct Curl_cfilter *cf,
+                       const char *fmt, ...)
+{
+  DEBUGASSERT(cf);
+  if(Curl_trc_cf_is_verbose(cf, data)) {
+    va_list ap;
+    int len = 0;
+    char buffer[MAXINFO + 2];
+    if(data->state.feat)
+      len += msnprintf(buffer + len, MAXINFO - len, "[%s] ",
+                       data->state.feat->name);
+    if(cf->sockindex)
+      len += msnprintf(buffer + len, MAXINFO - len, "[%s-%d] ",
+                      cf->cft->name, cf->sockindex);
+    else
+      len += msnprintf(buffer + len, MAXINFO - len, "[%s] ", cf->cft->name);
+    va_start(ap, fmt);
+    len += mvsnprintf(buffer + len, MAXINFO - len, fmt, ap);
+    va_end(ap);
+    buffer[len++] = '\n';
+    buffer[len] = '\0';
+    Curl_debug(data, CURLINFO_TEXT, buffer, len);
+  }
+}
+
+static struct curl_trc_feat *trc_feats[] = {
+#ifndef CURL_DISABLE_DOH
+  &Curl_doh_trc,
+#endif
+  NULL,
+};
 
 static struct Curl_cftype *cf_types[] = {
   &Curl_cft_tcp,
@@ -161,7 +173,9 @@ static struct Curl_cftype *cf_types[] = {
 #endif
 #ifdef USE_SSL
   &Curl_cft_ssl,
+#ifndef CURL_DISABLE_PROXY
   &Curl_cft_ssl_proxy,
+#endif
 #endif
 #if !defined(CURL_DISABLE_PROXY)
 #if !defined(CURL_DISABLE_HTTP)
@@ -217,6 +231,15 @@ CURLcode Curl_trc_opt(const char *config)
         break;
       }
     }
+    for(i = 0; trc_feats[i]; ++i) {
+      if(strcasecompare(token, "all")) {
+        trc_feats[i]->log_level = lvl;
+      }
+      else if(strcasecompare(token, trc_feats[i]->name)) {
+        trc_feats[i]->log_level = lvl;
+        break;
+      }
+    }
     token = strtok_r(NULL, ", ", &tok_buf);
   }
   free(tmp);
@@ -232,24 +255,14 @@ CURLcode Curl_trc_init(void)
   if(config) {
     return Curl_trc_opt(config);
   }
-#endif
+#endif /* DEBUGBUILD */
   return CURLE_OK;
 }
-#else /* !CURL_DISABLE_VERBOSE_STRINGS) */
+#else /* defined(CURL_DISABLE_VERBOSE_STRINGS) */
 
 CURLcode Curl_trc_init(void)
 {
   return CURLE_OK;
 }
 
-#if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
-void Curl_trc_cf_infof(struct Curl_easy *data, struct Curl_cfilter *cf,
-                       const char *fmt, ...)
-{
-  (void)data;
-  (void)cf;
-  (void)fmt;
-}
-#endif
-
-#endif /* !DEBUGBUILD */
+#endif /* !defined(CURL_DISABLE_VERBOSE_STRINGS) */

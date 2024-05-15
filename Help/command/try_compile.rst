@@ -156,8 +156,9 @@ The options for the above signatures are:
   Specify flags of the form :option:`-DVAR:TYPE=VALUE <cmake -D>` to be passed
   to the :manual:`cmake(1)` command-line used to drive the test build.
   The above example shows how values for variables
-  ``INCLUDE_DIRECTORIES``, ``LINK_DIRECTORIES``, and ``LINK_LIBRARIES``
-  are used.
+  ``COMPILE_DEFINITIONS``, ``INCLUDE_DIRECTORIES``, ``LINK_DIRECTORIES``,
+  ``LINK_LIBRARIES``, and ``LINK_OPTIONS`` are used. Compiler options
+  can be passed in like `CMAKE_FLAGS -DCOMPILE_DEFINITIONS=-Werror`.
 
 ``COMPILE_DEFINITIONS <defs>...``
   Specify ``-Ddefinition`` arguments to pass to :command:`add_definitions`
@@ -188,7 +189,7 @@ The options for the above signatures are:
   set the :prop_tgt:`STATIC_LIBRARY_OPTIONS` target property in the generated
   project, depending on the :variable:`CMAKE_TRY_COMPILE_TARGET_TYPE` variable.
 
-``LINKER_LANGUAGE <lang>```
+``LINKER_LANGUAGE <lang>``
   .. versionadded:: 3.29
 
   Specify the :prop_tgt:`LINKER_LANGUAGE` target property of the generated

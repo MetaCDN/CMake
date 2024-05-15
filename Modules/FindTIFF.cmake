@@ -65,11 +65,11 @@ The following cache variables may also be set:
   Debug and Release variants are found separately.
 #]=======================================================================]
 
+cmake_policy(PUSH)
+cmake_policy(SET CMP0057 NEW) # if IN_LIST
+cmake_policy(SET CMP0159 NEW) # file(STRINGS) with REGEX updates CMAKE_MATCH_<n>
+
 set(_TIFF_args)
-if (TIFF_FIND_QUIETLY)
-  list(APPEND _TIFF_args
-    QUIET)
-endif ()
 if (TIFF_FIND_VERSION)
   list(APPEND _TIFF_args
     "${TIFF_FIND_VERSION}")
@@ -100,9 +100,10 @@ if (_TIFF_component_opt)
     OPTIONAL_COMPONENTS "${_TIFF_component_opt}")
 endif ()
 unset(_TIFF_component_opt)
-find_package(tiff CONFIG ${_TIFF_args})
+# Always find with QUIET to avoid noise when it is not found.
+find_package(Tiff CONFIG QUIET ${_TIFF_args})
 unset(_TIFF_args)
-if (tiff_FOUND)
+if (Tiff_FOUND)
   if (NOT TARGET TIFF::TIFF)
     add_library(TIFF::TIFF IMPORTED INTERFACE)
     set_target_properties(TIFF::TIFF PROPERTIES
@@ -110,15 +111,86 @@ if (tiff_FOUND)
   endif ()
   get_property(TIFF_INCLUDE_DIRS TARGET TIFF::tiff PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
   get_property(TIFF_LIBRARIES TARGET TIFF::tiff PROPERTY INTERFACE_LINK_LIBRARIES)
-  get_property(_TIFF_location TARGET TIFF::tiff PROPERTY LOCATION)
-  list(APPEND TIFF_LIBRARIES
+  get_property(_TIFF_location TARGET TIFF::tiff PROPERTY IMPORTED_IMPLIB)
+  if (NOT _TIFF_location)
+    get_property(_TIFF_location_release TARGET TIFF::tiff PROPERTY IMPORTED_IMPLIB_RELEASE)
+    if (NOT _TIFF_location_release)
+      get_property(_TIFF_location_release TARGET TIFF::tiff PROPERTY IMPORTED_IMPLIB_RELWITHDEBINFO)
+    endif ()
+    get_property(_TIFF_location_debug TARGET TIFF::tiff PROPERTY IMPORTED_IMPLIB_DEBUG)
+    if (_TIFF_location_release AND _TIFF_location_debug)
+      set(_TIFF_location
+        optimized "${_TIFF_location_release}"
+        debug "${_TIFF_location_debug}")
+    elseif (_TIFF_location_release)
+      set(_TIFF_location "${_TIFF_location_release}")
+    elseif (_TIFF_location_debug)
+      set(_TIFF_location "${_TIFF_location_debug}")
+    else ()
+      get_property(_TIFF_location_release TARGET TIFF::tiff PROPERTY LOCATION_RELEASE)
+      if (NOT _TIFF_location_release)
+        get_property(_TIFF_location_release TARGET TIFF::tiff PROPERTY LOCATION_RELWITHDEBINFO)
+      endif ()
+      get_property(_TIFF_location_debug TARGET TIFF::tiff PROPERTY LOCATION_DEBUG)
+      if (_TIFF_location_release AND _TIFF_location_debug)
+        set(_TIFF_location
+          optimized "${_TIFF_location_release}"
+          debug "${_TIFF_location_debug}")
+      elseif (_TIFF_location_release)
+        set(_TIFF_location "${_TIFF_location_release}")
+      elseif (_TIFF_location_debug)
+        set(_TIFF_location "${_TIFF_location_debug}")
+      else ()
+        get_property(_TIFF_location TARGET TIFF::tiff PROPERTY LOCATION)
+      endif ()
+    endif ()
+    unset(_TIFF_location_release)
+    unset(_TIFF_location_debug)
+  endif ()
+  list(INSERT TIFF_LIBRARIES 0
     "${_TIFF_location}")
   unset(_TIFF_location)
   set(TIFF_FOUND 1)
   if("CXX" IN_LIST TIFF_FIND_COMPONENTS)
     if (TARGET TIFF::CXX)
-      get_property(_TIFF_CXX_location TARGET TIFF::CXX PROPERTY LOCATION)
-      list(APPEND TIFF_LIBRARIES ${_TIFF_CXX_location})
+      get_property(_TIFF_CXX_location TARGET TIFF::CXX PROPERTY IMPORTED_IMPLIB)
+      if (NOT _TIFF_CXX_location)
+        get_property(_TIFF_CXX_location_release TARGET TIFF::CXX PROPERTY IMPORTED_IMPLIB_RELEASE)
+        if (NOT _TIFF_CXX_location_release)
+          get_property(_TIFF_CXX_location_release TARGET TIFF::CXX PROPERTY IMPORTED_IMPLIB_RELWITHDEBINFO)
+        endif ()
+        get_property(_TIFF_CXX_location_debug TARGET TIFF::CXX PROPERTY IMPORTED_IMPLIB_DEBUG)
+        if (_TIFF_CXX_location_release AND _TIFF_CXX_location_debug)
+          set(_TIFF_CXX_location
+            optimized "${_TIFF_CXX_location_release}"
+            debug "${_TIFF_CXX_location_debug}")
+        elseif (_TIFF_CXX_location_release)
+          set(_TIFF_CXX_location "${_TIFF_CXX_location_release}")
+        elseif (_TIFF_CXX_location_debug)
+          set(_TIFF_CXX_location "${_TIFF_CXX_location_debug}")
+        else ()
+          get_property(_TIFF_CXX_location_release TARGET TIFF::CXX PROPERTY LOCATION_RELEASE)
+          if (NOT _TIFF_CXX_location_release)
+            get_property(_TIFF_CXX_location_release TARGET TIFF::CXX PROPERTY LOCATION_RELWITHDEBINFO)
+          endif ()
+          get_property(_TIFF_CXX_location_debug TARGET TIFF::CXX PROPERTY LOCATION_DEBUG)
+          if (_TIFF_CXX_location_release AND _TIFF_CXX_location_debug)
+            set(_TIFF_CXX_location
+              optimized "${_TIFF_CXX_location_release}"
+              debug "${_TIFF_CXX_location_debug}")
+          elseif (_TIFF_CXX_location_release)
+            set(_TIFF_CXX_location "${_TIFF_CXX_location_release}")
+          elseif (_TIFF_CXX_location_debug)
+            set(_TIFF_CXX_location "${_TIFF_CXX_location_debug}")
+          else ()
+            get_property(_TIFF_CXX_location TARGET TIFF::CXX PROPERTY LOCATION)
+          endif ()
+        endif ()
+        unset(_TIFF_CXX_location_release)
+        unset(_TIFF_CXX_location_debug)
+      endif ()
+      list(INSERT TIFF_LIBRARIES 0
+        "${_TIFF_CXX_location}")
       unset(_TIFF_CXX_location)
       set(TIFF_CXX_FOUND 1)
     else ()
@@ -130,16 +202,21 @@ if (tiff_FOUND)
       endif ()
     endif ()
   endif ()
-  set(TIFF_VERSION_STRING "${tiff_VERSION}")
+  set(TIFF_VERSION_STRING "${Tiff_VERSION}")
   foreach (_TIFF_component IN LISTS TIFF_FIND_COMPONENTS)
-    set(TIFF_${_TIFF_component}_FOUND "${tiff_${_TIFF_component}_FOUND}")
+    set(TIFF_${_TIFF_component}_FOUND "${Tiff_${_TIFF_component}_FOUND}")
   endforeach ()
   unset(_TIFF_component)
+
+  include(${CMAKE_CURRENT_LIST_DIR}/FindPackageHandleStandardArgs.cmake)
+  find_package_handle_standard_args(TIFF
+                                    HANDLE_COMPONENTS
+                                    REQUIRED_VARS Tiff_DIR
+                                    VERSION_VAR TIFF_VERSION_STRING)
+
+  cmake_policy(POP)
   return ()
 endif ()
-
-cmake_policy(PUSH)
-cmake_policy(SET CMP0057 NEW)
 
 find_path(TIFF_INCLUDE_DIR tiff.h)
 

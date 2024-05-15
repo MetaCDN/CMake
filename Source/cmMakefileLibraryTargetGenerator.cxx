@@ -218,6 +218,9 @@ void cmMakefileLibraryTargetGenerator::WriteModuleLibraryRules(bool relink)
     extraFlags, this->GeneratorTarget, linkLineComputer.get(),
     this->GetConfigName());
 
+  this->UseLWYU = this->LocalGenerator->AppendLWYUFlags(
+    extraFlags, this->GeneratorTarget, linkLanguage);
+
   this->WriteLibraryRules(linkRuleVar, extraFlags, relink);
 }
 
@@ -975,6 +978,9 @@ void cmMakefileLibraryTargetGenerator::WriteLibraryRules(
     auto genStubsRule =
       this->Makefile->GetDefinition("CMAKE_CREATE_TEXT_STUBS");
     cmList genStubs_commands{ genStubsRule };
+    this->LocalGenerator->CreateCDCommand(
+      genStubs_commands, this->Makefile->GetCurrentBinaryDirectory(),
+      this->LocalGenerator->GetBinaryDirectory());
 
     std::string TBDFullPath =
       cmStrCat(outpathImp, this->TargetNames.ImportOutput);

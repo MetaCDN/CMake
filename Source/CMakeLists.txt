@@ -450,7 +450,6 @@ add_library(
   cmUVProcessChain.h
   cmUVStream.h
   cmUVStreambuf.h
-  cmUVSignalHackRAII.h
   cmVariableWatch.cxx
   cmVariableWatch.h
   cmVersion.cxx
@@ -558,6 +557,8 @@ add_library(
   cmFindLibraryCommand.h
   cmFindPackageCommand.cxx
   cmFindPackageCommand.h
+  cmFindPackageStack.cxx
+  cmFindPackageStack.h
   cmFindPathCommand.cxx
   cmFindPathCommand.h
   cmFindProgramCommand.cxx
@@ -885,8 +886,6 @@ if(WIN32)
         cmGlobalVisualStudio7Generator.h
         cmGlobalVisualStudio8Generator.cxx
         cmGlobalVisualStudio8Generator.h
-        cmGlobalVisualStudio9Generator.cxx
-        cmGlobalVisualStudio9Generator.h
         cmVisualStudioGeneratorOptions.h
         cmVisualStudioGeneratorOptions.cxx
         cmVsProjectType.h
@@ -1089,6 +1088,9 @@ add_library(
   CTest/cmCTestHG.h
   CTest/cmCTestP4.cxx
   CTest/cmCTestP4.h
+
+  CTest/cmUVJobServerClient.cxx
+  CTest/cmUVJobServerClient.h
 
   LexerParser/cmCTestResourceGroupsLexer.cxx
   LexerParser/cmCTestResourceGroupsLexer.h
