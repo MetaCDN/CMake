@@ -1,4 +1,3 @@
-cmake_minimum_required(VERSION 3.4)
 include(RunCMake)
 
 # Function to build and install a project.  The latter step *-check.cmake
@@ -9,7 +8,9 @@ function(run_install_test case)
   file(REMOVE_RECURSE "${RunCMake_TEST_BINARY_DIR}")
   file(MAKE_DIRECTORY "${RunCMake_TEST_BINARY_DIR}")
   run_cmake(${case})
+  set(RunCMake_TEST_OUTPUT_MERGE 1)
   run_cmake_command(${case}-build ${CMAKE_COMMAND} --build . --config Debug)
+  unset(RunCMake_TEST_OUTPUT_MERGE)
   # Check "all" components.
   set(CMAKE_INSTALL_PREFIX ${RunCMake_TEST_BINARY_DIR}/root-all)
   run_cmake_command(${case}-all ${CMAKE_COMMAND} -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} -DBUILD_TYPE=Debug -P cmake_install.cmake)
@@ -78,6 +79,7 @@ run_cmake(DIRECTORY-DESTINATION-bad)
 run_cmake(FILES-DESTINATION-bad)
 run_cmake(FILES-RENAME-bad)
 run_cmake(TARGETS-DESTINATION-bad)
+run_cmake(EXPORT-FindDependencyExportGate)
 run_cmake(EXPORT-OldIFace)
 run_cmake(EXPORT-UnknownExport)
 run_cmake(EXPORT-NamelinkOnly)
@@ -121,6 +123,10 @@ run_install_test(TARGETS-OPTIONAL)
 run_install_test(FILES-OPTIONAL)
 run_install_test(DIRECTORY-OPTIONAL)
 run_install_test(TARGETS-Defaults)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  run_install_test(TARGETS-NAMELINK-No-Tweak)
+endif()
 
 set(RunCMake_TEST_OPTIONS
   "-DCMAKE_INSTALL_BINDIR:PATH=mybin"
@@ -167,13 +173,17 @@ unset(RunCMake_TEST_OPTIONS)
 
 run_install_test(Deprecated)
 run_install_test(PRE_POST_INSTALL_SCRIPT)
-run_install_test(SCRIPT)
 run_install_test(TARGETS-CONFIGURATIONS)
 run_install_test(DIRECTORY-PATTERN)
 run_install_test(TARGETS-Parts)
 run_install_test(FILES-PERMISSIONS)
 run_install_test(TARGETS-RPATH)
 run_install_test(InstallRequiredSystemLibraries)
+run_install_test(EXPORT-FindDependencyExport)
+
+set(RunCMake_TEST_OPTIONS "-DCMAKE_POLICY_DEFAULT_CMP0087:STRING=NEW")
+run_install_test(SCRIPT)
+unset(RunCMake_TEST_OPTIONS)
 
 if(UNIX)
   run_install_test(DIRECTORY-symlink-clobber)

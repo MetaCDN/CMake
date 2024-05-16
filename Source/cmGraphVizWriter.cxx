@@ -15,6 +15,7 @@
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
 #include "cmLinkItem.h"
+#include "cmList.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
 #include "cmState.h"
@@ -255,9 +256,8 @@ void cmGraphVizWriter::ReadSettings(
 
   this->TargetsToIgnoreRegex.clear();
   if (!ignoreTargetsRegexes.empty()) {
-    std::vector<std::string> ignoreTargetsRegExVector =
-      cmExpandedList(ignoreTargetsRegexes);
-    for (std::string const& currentRegexString : ignoreTargetsRegExVector) {
+    cmList ignoreTargetsRegExList{ ignoreTargetsRegexes };
+    for (std::string const& currentRegexString : ignoreTargetsRegExList) {
       cmsys::RegularExpression currentRegex;
       if (!currentRegex.compile(currentRegexString)) {
         std::cerr << "Could not compile bad regex \"" << currentRegexString
@@ -284,7 +284,8 @@ void cmGraphVizWriter::Write()
       // Reserved targets have inconsistent names across platforms (e.g. 'all'
       // vs. 'ALL_BUILD'), which can disrupt the traversal ordering.
       // We don't need or want them anyway.
-      if (!cmGlobalGenerator::IsReservedTarget(gt->GetName())) {
+      if (!cmGlobalGenerator::IsReservedTarget(gt->GetName()) &&
+          !cmHasLiteralPrefix(gt->GetName(), "__cmake_")) {
         sortedGeneratorTargets.insert(gt.get());
       }
     }

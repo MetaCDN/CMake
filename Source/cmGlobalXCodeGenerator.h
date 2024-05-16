@@ -120,7 +120,7 @@ public:
    * Used to determine if this generator supports DEPFILE option.
    */
   bool SupportsCustomCommandDepfile() const override { return true; }
-  virtual cm::optional<cmDepfileFormat> DepfileFormat() const override
+  cm::optional<cmDepfileFormat> DepfileFormat() const override
   {
     return this->XcodeBuildSystem == BuildSystem::One
       ? cmDepfileFormat::MakeDepfile
@@ -161,6 +161,7 @@ private:
   bool CreateGroups(std::vector<cmLocalGenerator*>& generators);
   std::string XCodeEscapePath(const std::string& p);
   std::string RelativeToSource(const std::string& p);
+  std::string RelativeToRootBinary(const std::string& p);
   std::string RelativeToBinary(const std::string& p);
   std::string ConvertToRelativeForMake(std::string const& p);
   void CreateCustomCommands(
@@ -224,6 +225,8 @@ private:
   void AddEmbeddedPlugIns(cmXCodeObject* target);
   void AddEmbeddedAppExtensions(cmXCodeObject* target);
   void AddEmbeddedExtensionKitExtensions(cmXCodeObject* target);
+  void AddEmbeddedResources(cmXCodeObject* target);
+  void AddEmbeddedXPCServices(cmXCodeObject* target);
   void AddPositionIndependentLinkAttribute(cmGeneratorTarget* target,
                                            cmXCodeObject* buildSettings,
                                            const std::string& configName);
@@ -355,6 +358,7 @@ private:
                                   std::string const& configName);
   cmXCodeObject* MainGroupChildren;
   cmXCodeObject* FrameworkGroup;
+  cmXCodeObject* ResourcesGroup;
   cmMakefile* CurrentMakefile;
   cmLocalGenerator* CurrentLocalGenerator;
   cmLocalGenerator* CurrentRootGenerator = nullptr;

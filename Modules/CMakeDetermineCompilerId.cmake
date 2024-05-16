@@ -35,7 +35,7 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
   else(CMAKE_${lang}_FLAGS_INIT)
     set(CMAKE_${lang}_COMPILER_ID_FLAGS ${CMAKE_${lang}_FLAGS_INIT})
   endif()
-  string(REPLACE " " ";" CMAKE_${lang}_COMPILER_ID_FLAGS_LIST "${CMAKE_${lang}_COMPILER_ID_FLAGS}")
+  separate_arguments(CMAKE_${lang}_COMPILER_ID_FLAGS_LIST NATIVE_COMMAND "${CMAKE_${lang}_COMPILER_ID_FLAGS}")
 
   # Compute the directory in which to run the test.
   set(CMAKE_${lang}_COMPILER_ID_DIR ${CMAKE_PLATFORM_INFO_DIR}/CompilerId${lang})
@@ -174,6 +174,35 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     endif()
   endif()
 
+  if("x${lang}" STREQUAL "xFortran" AND "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xLLVMFlang")
+    # Parse the target triple to detect information not always available from the preprocessor.
+    if(COMPILER_${lang}_PRODUCED_OUTPUT MATCHES "-triple ([0-9a-z_]*)-.*windows-msvc([0-9]+)\\.([0-9]+)")
+      # CMakeFortranCompilerId.F.in does not extract the _MSC_VER minor version.
+      # We can do better using the version parsed here.
+      set(CMAKE_${lang}_SIMULATE_VERSION "${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+
+      if (CMAKE_${lang}_COMPILER_VERSION VERSION_LESS 18.0)
+        # LLVMFlang < 18.0 does not provide predefines identifying the MSVC ABI or architecture.
+        set(CMAKE_${lang}_SIMULATE_ID "MSVC")
+        set(arch ${CMAKE_MATCH_1})
+        if(arch STREQUAL "x86_64")
+          set(CMAKE_${lang}_COMPILER_ARCHITECTURE_ID "x64")
+        elseif(arch STREQUAL "aarch64")
+          set(CMAKE_${lang}_COMPILER_ARCHITECTURE_ID "ARM64")
+        elseif(arch STREQUAL "arm64ec")
+          set(CMAKE_${lang}_COMPILER_ARCHITECTURE_ID "ARM64EC")
+        elseif(arch MATCHES "^i[3-9]86$")
+          set(CMAKE_${lang}_COMPILER_ARCHITECTURE_ID "X86")
+        else()
+          message(FATAL_ERROR "LLVMFlang target architecture unrecognized: ${arch}")
+        endif()
+        set(MSVC_${lang}_ARCHITECTURE_ID "${CMAKE_${lang}_COMPILER_ARCHITECTURE_ID}")
+      endif()
+    elseif(COMPILER_${lang}_PRODUCED_OUTPUT MATCHES "-triple ([0-9a-z_]*)-.*windows-gnu")
+      set(CMAKE_${lang}_SIMULATE_ID "GNU")
+    endif()
+  endif()
+
   if (COMPILER_QNXNTO AND (CMAKE_${lang}_COMPILER_ID STREQUAL "GNU" OR CMAKE_${lang}_COMPILER_ID STREQUAL "LCC"))
     execute_process(
       COMMAND "${CMAKE_${lang}_COMPILER}"
@@ -251,13 +280,60 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
     endif()
   elseif("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xGNU"
     OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xAppleClang"
-    OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xFujitsuClang")
+    OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xFujitsuClang"
+    OR "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xTIClang")
     set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "GNU")
   elseif("x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xMSVC")
     set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "MSVC")
   else()
     set(CMAKE_${lang}_COMPILER_FRONTEND_VARIANT "")
   endif()
+
+  # `clang-scan-deps` needs to know the resource directory. This only matters
+  # for C++ and the GNU-frontend variant.
+  set(CMAKE_${lang}_COMPILER_CLANG_RESOURCE_DIR "")
+  if ("x${lang}" STREQUAL "xCXX" AND
+      "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xClang" AND
+      "x${CMAKE_${lang}_COMPILER_FRONTEND_VARIANT}" STREQUAL "xGNU")
+    execute_process(
+      COMMAND "${CMAKE_${lang}_COMPILER}"
+        ${CMAKE_${lang}_COMPILER_ID_ARG1}
+        -print-resource-dir
+      OUTPUT_VARIABLE _clang_resource_dir_out
+      ERROR_VARIABLE _clang_resource_dir_err
+      RESULT_VARIABLE _clang_resource_dir_res
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    if (_clang_resource_dir_res EQUAL 0)
+      file(TO_CMAKE_PATH "${_clang_resource_dir_out}" _clang_resource_dir_out)
+      if(IS_DIRECTORY "${_clang_resource_dir_out}")
+        set(CMAKE_${lang}_COMPILER_CLANG_RESOURCE_DIR "${_clang_resource_dir_out}")
+      endif()
+    endif ()
+  endif ()
+
+  set(CMAKE_${lang}_STANDARD_LIBRARY "")
+  if ("x${lang}" STREQUAL "xCXX" AND
+      EXISTS "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/${lang}-DetectStdlib.h" AND
+      "x${CMAKE_${lang}_COMPILER_ID}" STREQUAL "xClang" AND
+      "x${CMAKE_${lang}_COMPILER_FRONTEND_VARIANT}" STREQUAL "xGNU")
+    # See #20851 for a proper abstraction for this.
+    execute_process(
+      COMMAND "${CMAKE_${lang}_COMPILER}"
+        ${CMAKE_${lang}_COMPILER_ID_ARG1}
+        ${CMAKE_CXX_COMPILER_ID_FLAGS_LIST}
+        -E
+        -x c++-header
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/${lang}-DetectStdlib.h"
+        -o - # Write to stdout.
+      OUTPUT_VARIABLE _lang_stdlib_out
+      ERROR_VARIABLE _lang_stdlib_err
+      RESULT_VARIABLE _lang_stdlib_res
+      ERROR_STRIP_TRAILING_WHITESPACE)
+    if (_lang_stdlib_res EQUAL 0)
+      string(REGEX REPLACE ".*CMAKE-STDLIB-DETECT: (.+)\n.*" "\\1" "CMAKE_${lang}_STANDARD_LIBRARY" "${_lang_stdlib_out}")
+    endif ()
+  endif ()
 
   # Display the final identification result.
   if(CMAKE_${lang}_COMPILER_ID)
@@ -301,6 +377,8 @@ function(CMAKE_DETERMINE_COMPILER_ID lang flagvar src)
   set(CMAKE_${lang}_EXTENSIONS_COMPUTED_DEFAULT "${CMAKE_${lang}_EXTENSIONS_COMPUTED_DEFAULT}" PARENT_SCOPE)
   set(CMAKE_${lang}_COMPILER_PRODUCED_OUTPUT "${COMPILER_${lang}_PRODUCED_OUTPUT}" PARENT_SCOPE)
   set(CMAKE_${lang}_COMPILER_PRODUCED_FILES "${COMPILER_${lang}_PRODUCED_FILES}" PARENT_SCOPE)
+  set(CMAKE_${lang}_COMPILER_CLANG_RESOURCE_DIR "${CMAKE_${lang}_COMPILER_CLANG_RESOURCE_DIR}" PARENT_SCOPE)
+  set(CMAKE_${lang}_STANDARD_LIBRARY "${CMAKE_${lang}_STANDARD_LIBRARY}" PARENT_SCOPE)
 endfunction()
 
 include(CMakeCompilerIdDetection)
@@ -345,6 +423,7 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
     set(id_platform ${CMAKE_VS_PLATFORM_NAME})
     set(id_lang "${lang}")
     set(id_PostBuildEvent_Command "")
+    set(id_api_level "")
     if(CMAKE_VS_PLATFORM_TOOLSET MATCHES "^[Ll][Ll][Vv][Mm](_v[0-9]+(_xp)?)?$")
       set(id_cl_var "ClangClExecutable")
     elseif(CMAKE_VS_PLATFORM_TOOLSET MATCHES "^[Cc][Ll][Aa][Nn][Gg]([Cc][Ll]$|_[0-9])")
@@ -375,7 +454,13 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
     elseif(lang STREQUAL Fortran)
       set(v Intel)
       set(ext vfproj)
-      set(id_cl ifort.exe)
+      if(CMAKE_VS_PLATFORM_TOOLSET_FORTRAN)
+        set(id_cl "${CMAKE_VS_PLATFORM_TOOLSET_FORTRAN}.exe")
+        set(id_UseCompiler "UseCompiler=\"${CMAKE_VS_PLATFORM_TOOLSET_FORTRAN}Compiler\"")
+      else()
+        set(id_cl ifort.exe)
+        set(id_UseCompiler "")
+      endif()
     elseif(lang STREQUAL CSharp)
       set(v 10)
       set(ext csproj)
@@ -427,9 +512,10 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
       set(id_system "")
     endif()
     if(id_keyword STREQUAL "Android")
+      set(id_api_level "<AndroidAPILevel>android-${CMAKE_SYSTEM_VERSION}</AndroidAPILevel>")
       if(CMAKE_GENERATOR MATCHES "Visual Studio 14")
         set(id_system_version "<ApplicationTypeRevision>2.0</ApplicationTypeRevision>")
-      elseif(CMAKE_GENERATOR MATCHES "Visual Studio 1[56]")
+      elseif(CMAKE_GENERATOR MATCHES "Visual Studio 1[567]")
         set(id_system_version "<ApplicationTypeRevision>3.0</ApplicationTypeRevision>")
       else()
         set(id_system_version "")
@@ -603,6 +689,7 @@ Id flags: ${testflags} ${CMAKE_${lang}_COMPILER_ID_FLAGS_ALWAYS}
     if(CMAKE_OSX_SYSROOT)
       set(id_sdkroot "SDKROOT = \"${CMAKE_OSX_SYSROOT}\";")
       if(CMAKE_OSX_SYSROOT MATCHES "(^|/)[Ii][Pp][Hh][Oo][Nn][Ee]" OR
+        CMAKE_OSX_SYSROOT MATCHES "(^|/)[Xx][Rr]" OR
         CMAKE_OSX_SYSROOT MATCHES "(^|/)[Aa][Pp][Pp][Ll][Ee][Tt][Vv]")
         set(id_product_type "com.apple.product-type.bundle.unit-test")
       elseif(CMAKE_OSX_SYSROOT MATCHES "(^|/)[Ww][Aa][Tt][Cc][Hh]")
@@ -856,9 +943,12 @@ function(CMAKE_DETERMINE_COMPILER_ID_CHECK lang file)
     set(SIMULATE_VERSION)
     set(CMAKE_${lang}_COMPILER_ID_STRING_REGEX ".?I.?N.?F.?O.?:.?[A-Za-z0-9_]+\\[[^]]*\\]")
     foreach(encoding "" "ENCODING;UTF-16LE" "ENCODING;UTF-16BE")
+      cmake_policy(PUSH)
+      cmake_policy(SET CMP0159 NEW) # file(STRINGS) with REGEX updates CMAKE_MATCH_<n>
       file(STRINGS "${file}" CMAKE_${lang}_COMPILER_ID_STRINGS
         LIMIT_COUNT 38 ${encoding}
         REGEX "${CMAKE_${lang}_COMPILER_ID_STRING_REGEX}")
+      cmake_policy(POP)
       if(NOT CMAKE_${lang}_COMPILER_ID_STRINGS STREQUAL "")
         break()
       endif()
@@ -1144,7 +1234,7 @@ function(CMAKE_DETERMINE_MSVC_SHOWINCLUDES_PREFIX lang userflags)
     ENCODING AUTO # cl prints in console output code page
     )
   string(REPLACE "\n" "\n  " msg "  ${out}")
-  if(res EQUAL 0 AND "${out}" MATCHES "(^|\n)([^:\n][^:\n]+:[^:\n]*[^: \n][^: \n]:?[ \t]+)[A-Za-z]:\\\\")
+  if(res EQUAL 0 AND "${out}" MATCHES "(^|\n)([^:\n][^:\n]+:[^:\n]*[^: \n][^: \n]:?[ \t]+)([A-Za-z]:\\\\|\\./|\\.\\\\|/)")
     set(CMAKE_${lang}_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}" PARENT_SCOPE)
     string(APPEND msg "\nFound prefix \"${CMAKE_MATCH_2}\"")
   else()

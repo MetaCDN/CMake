@@ -17,8 +17,9 @@
 #include <cm/string_view>
 #include <cmext/string_view>
 
-#include "cmDocumentationEntry.h"
+#include "cmDocumentationEntry.h" // IWYU pragma: keep
 #include "cmGeneratedFileStream.h"
+#include "cmGlobalGeneratorFactory.h"
 #include "cmInstalledFile.h"
 #include "cmListFileCache.h"
 #include "cmMessageType.h"
@@ -37,15 +38,22 @@
 #endif
 
 class cmConfigureLog;
+
+#ifdef CMake_ENABLE_DEBUGGER
+namespace cmDebugger {
+class cmDebuggerAdapter;
+}
+#endif
+
 class cmExternalMakefileProjectGeneratorFactory;
 class cmFileAPI;
 class cmFileTimeCache;
 class cmGlobalGenerator;
-class cmGlobalGeneratorFactory;
 class cmMakefile;
 class cmMessenger;
 class cmVariableWatch;
 struct cmBuildOptions;
+struct cmGlobCacheEntry;
 
 /** \brief Represents a cmake invocation.
  *
@@ -118,13 +126,7 @@ public:
     FIND_PACKAGE_MODE
   };
 
-  /** \brief Define supported trace formats **/
-  enum TraceFormat
-  {
-    TRACE_UNDEFINED,
-    TRACE_HUMAN,
-    TRACE_JSON_V1,
-  };
+  using TraceFormat = cmTraceEnums::TraceOutputFormat;
 
   struct GeneratorInfo
   {
@@ -334,30 +336,26 @@ public:
    */
   cmValue GetCacheDefinition(const std::string&) const;
   //! Add an entry into the cache
-  void AddCacheEntry(const std::string& key, const char* value,
-                     const char* helpString, int type)
-  {
-    this->AddCacheEntry(key,
-                        value ? cmValue(std::string(value)) : cmValue(nullptr),
-                        helpString, type);
-  }
   void AddCacheEntry(const std::string& key, const std::string& value,
-                     const char* helpString, int type)
+                     const std::string& helpString, int type)
   {
-    this->AddCacheEntry(key, cmValue(value), helpString, type);
+    this->AddCacheEntry(key, cmValue{ value }, cmValue{ helpString }, type);
   }
   void AddCacheEntry(const std::string& key, cmValue value,
-                     const char* helpString, int type);
+                     const std::string& helpString, int type)
+  {
+    this->AddCacheEntry(key, value, cmValue{ helpString }, type);
+  }
+  void AddCacheEntry(const std::string& key, cmValue value, cmValue helpString,
+                     int type);
 
   bool DoWriteGlobVerifyTarget() const;
   std::string const& GetGlobVerifyScript() const;
   std::string const& GetGlobVerifyStamp() const;
-  void AddGlobCacheEntry(bool recurse, bool listDirectories,
-                         bool followSymlinks, const std::string& relative,
-                         const std::string& expression,
-                         const std::vector<std::string>& files,
+  void AddGlobCacheEntry(const cmGlobCacheEntry& entry,
                          const std::string& variable,
                          cmListFileBacktrace const& bt);
+  std::vector<cmGlobCacheEntry> GetGlobCacheEntries() const;
 
   /**
    * Get the system information and write it to the file specified
@@ -410,8 +408,11 @@ public:
   std::vector<cmDocumentationEntry> GetGeneratorsDocumentation();
 
   //! Set/Get a property of this target file
-  void SetProperty(const std::string& prop, const char* value);
   void SetProperty(const std::string& prop, cmValue value);
+  void SetProperty(const std::string& prop, std::nullptr_t)
+  {
+    this->SetProperty(prop, cmValue{ nullptr });
+  }
   void SetProperty(const std::string& prop, const std::string& value)
   {
     this->SetProperty(prop, cmValue(value));
@@ -633,6 +634,10 @@ public:
   void UnwatchUnusedCli(const std::string& var);
   void WatchUnusedCli(const std::string& var);
 
+#if !defined(CMAKE_BOOTSTRAP)
+  cmFileAPI* GetFileAPI() const { return this->FileAPI.get(); }
+#endif
+
   cmState* GetState() const { return this->State.get(); }
   void SetCurrentSnapshot(cmStateSnapshot const& snapshot)
   {
@@ -662,6 +667,23 @@ public:
         this->GetProfilingOutput(), category, name, argsFunc());
     }
     return cm::nullopt;
+  }
+#endif
+
+#ifdef CMake_ENABLE_DEBUGGER
+  bool GetDebuggerOn() const { return this->DebuggerOn; }
+  std::string GetDebuggerPipe() const { return this->DebuggerPipe; }
+  std::string GetDebuggerDapLogFile() const
+  {
+    return this->DebuggerDapLogFile;
+  }
+  void SetDebuggerOn(bool b) { this->DebuggerOn = b; }
+  bool StartDebuggerIfEnabled();
+  void StopDebuggerIfNeeded(int exitCode);
+  std::shared_ptr<cmDebugger::cmDebuggerAdapter> GetDebugAdapter()
+    const noexcept
+  {
+    return this->DebugAdapter;
   }
 #endif
 
@@ -719,7 +741,7 @@ private:
   bool DebugFindOutput = false;
   bool Trace = false;
   bool TraceExpand = false;
-  TraceFormat TraceFormatVar = TRACE_HUMAN;
+  TraceFormat TraceFormatVar = TraceFormat::Human;
   cmGeneratedFileStream TraceFile;
   cmake* TraceRedirect = nullptr;
 #ifndef CMAKE_BOOTSTRAP
@@ -805,7 +827,20 @@ private:
   std::unique_ptr<cmMakefileProfilingData> ProfilingOutput;
 #endif
 
+#ifdef CMake_ENABLE_DEBUGGER
+  std::shared_ptr<cmDebugger::cmDebuggerAdapter> DebugAdapter;
+  bool DebuggerOn = false;
+  std::string DebuggerPipe;
+  std::string DebuggerDapLogFile;
+#endif
+
+  cm::optional<int> ScriptModeExitCode;
+
 public:
+  bool HasScriptModeExitCode() const { return ScriptModeExitCode.has_value(); }
+  void SetScriptModeExitCode(int code) { ScriptModeExitCode = code; }
+  int GetScriptModeExitCode() const { return ScriptModeExitCode.value_or(-1); }
+
   static cmDocumentationEntry CMAKE_STANDARD_OPTIONS_TABLE[18];
 };
 

@@ -12,20 +12,19 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
 #include <cm/iterator>
 #include <cm/optional>
 #include <cm/string_view>
-#include <cm/vector>
 #include <cmext/algorithm>
 #include <cmext/string_view>
 
 #include "cmsys/RegularExpression.hxx"
 #include "cmsys/String.h"
 
-#include "cmAlgorithms.h"
 #include "cmCMakePath.h"
 #include "cmComputeLinkInformation.h"
 #include "cmGeneratorExpression.h"
@@ -35,6 +34,7 @@
 #include "cmGeneratorTarget.h"
 #include "cmGlobalGenerator.h"
 #include "cmLinkItem.h"
+#include "cmList.h"
 #include "cmLocalGenerator.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
@@ -128,6 +128,16 @@ struct BooleanOpNode : public cmGeneratorExpressionNode
 
   int NumExpectedParameters() const override { return OneOrMoreParameters; }
 
+  bool ShouldEvaluateNextParameter(const std::vector<std::string>& parameters,
+                                   std::string& def_value) const override
+  {
+    if (!parameters.empty() && parameters.back() == failureVal) {
+      def_value = failureVal;
+      return false;
+    }
+    return true;
+  }
+
   std::string Evaluate(const std::vector<std::string>& parameters,
                        cmGeneratorExpressionContext* context,
                        const GeneratorExpressionContent* content,
@@ -194,6 +204,13 @@ static const struct IfNode : public cmGeneratorExpressionNode
   IfNode() {} // NOLINT(modernize-use-equals-default)
 
   int NumExpectedParameters() const override { return 3; }
+
+  bool ShouldEvaluateNextParameter(const std::vector<std::string>& parameters,
+                                   std::string&) const override
+  {
+    return (parameters.empty() ||
+            parameters[0] != cmStrCat(parameters.size() - 1, ""));
+  }
 
   std::string Evaluate(const std::vector<std::string>& parameters,
                        cmGeneratorExpressionContext* context,
@@ -291,18 +308,18 @@ static const struct InListNode : public cmGeneratorExpressionNode
     const GeneratorExpressionContent* /*content*/,
     cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
   {
-    std::vector<std::string> values;
-    std::vector<std::string> checkValues;
+    cmList values;
+    cmList checkValues;
     bool check = false;
     switch (context->LG->GetPolicyStatus(cmPolicies::CMP0085)) {
       case cmPolicies::WARN:
         if (parameters.front().empty()) {
           check = true;
-          cmExpandList(parameters[1], checkValues, true);
+          checkValues.assign(parameters[1], cmList::EmptyElements::Yes);
         }
         CM_FALLTHROUGH;
       case cmPolicies::OLD:
-        cmExpandList(parameters[1], values);
+        values.assign(parameters[1]);
         if (check && values != checkValues) {
           std::ostringstream e;
           e << cmPolicies::GetPolicyWarning(cmPolicies::CMP0085)
@@ -319,11 +336,11 @@ static const struct InListNode : public cmGeneratorExpressionNode
       case cmPolicies::REQUIRED_IF_USED:
       case cmPolicies::REQUIRED_ALWAYS:
       case cmPolicies::NEW:
-        cmExpandList(parameters[1], values, true);
+        values.assign(parameters[1], cmList::EmptyElements::Yes);
         break;
     }
 
-    return cm::contains(values, parameters.front()) ? "1" : "0";
+    return values.find(parameters.front()) != cmList::npos ? "1" : "0";
   }
 } inListNode;
 
@@ -352,24 +369,17 @@ static const struct FilterNode : public cmGeneratorExpressionNode
       return {};
     }
 
-    const bool exclude = parameters[1] == "EXCLUDE";
-
-    cmsys::RegularExpression re;
-    if (!re.compile(parameters[2])) {
+    try {
+      return cmList{ parameters.front(), cmList::EmptyElements::Yes }
+        .filter(parameters[2],
+                parameters[1] == "EXCLUDE" ? cmList::FilterMode::EXCLUDE
+                                           : cmList::FilterMode::INCLUDE)
+        .to_string();
+    } catch (std::invalid_argument&) {
       reportError(context, content->GetOriginalExpression(),
                   "$<FILTER:...> failed to compile regex");
       return {};
     }
-
-    std::vector<std::string> values;
-    std::vector<std::string> result;
-    cmExpandList(parameters.front(), values, true);
-
-    std::copy_if(values.cbegin(), values.cend(), std::back_inserter(result),
-                 [&re, exclude](std::string const& input) {
-                   return exclude ^ re.find(input);
-                 });
-    return cmJoin(cmMakeRange(result.cbegin(), result.cend()), ";");
   }
 } filterNode;
 
@@ -391,11 +401,9 @@ static const struct RemoveDuplicatesNode : public cmGeneratorExpressionNode
         "$<REMOVE_DUPLICATES:...> expression requires one parameter");
     }
 
-    std::vector<std::string> values = cmExpandedList(parameters.front(), true);
-
-    auto valuesEnd = cmRemoveDuplicates(values);
-    auto valuesBegin = values.cbegin();
-    return cmJoin(cmMakeRange(valuesBegin, valuesEnd), ";");
+    return cmList{ parameters.front(), cmList::EmptyElements::Yes }
+      .remove_duplicates()
+      .to_string();
   }
 
 } removeDuplicatesNode;
@@ -479,7 +487,8 @@ protected:
     if (context->HeadTarget) {
       cmGeneratorExpressionDAGChecker dagChecker(
         context->Backtrace, context->HeadTarget,
-        genexOperator + ":" + expression, content, dagCheckerParent);
+        genexOperator + ":" + expression, content, dagCheckerParent,
+        context->LG);
       switch (dagChecker.Check()) {
         case cmGeneratorExpressionDAGChecker::SELF_REFERENCE:
         case cmGeneratorExpressionDAGChecker::CYCLIC_REFERENCE: {
@@ -539,6 +548,7 @@ static const struct TargetGenexEvalNode : public GenexEvaluator
       return expression;
     }
 
+    // Replace the surrounding context with the named target.
     cmGeneratorExpressionContext targetContext(
       context->LG, context->Config, context->Quiet, target, target,
       context->EvaluateForBuildsystem, context->Backtrace, context->Language);
@@ -645,22 +655,48 @@ public:
 
 using Arguments = Range<std::vector<std::string>>;
 
-bool CheckPathParametersEx(cmGeneratorExpressionContext* ctx,
-                           const GeneratorExpressionContent* cnt,
-                           cm::string_view option, std::size_t count,
-                           int required = 1, bool exactly = true)
+bool CheckGenExParameters(cmGeneratorExpressionContext* ctx,
+                          const GeneratorExpressionContent* cnt,
+                          cm::string_view genex, cm::string_view option,
+                          std::size_t count, int required = 1,
+                          bool exactly = true)
 {
   if (static_cast<int>(count) < required ||
       (exactly && static_cast<int>(count) > required)) {
+    std::string nbParameters;
+    switch (required) {
+      case 1:
+        nbParameters = "one parameter";
+        break;
+      case 2:
+        nbParameters = "two parameters";
+        break;
+      case 3:
+        nbParameters = "three parameters";
+        break;
+      case 4:
+        nbParameters = "four parameters";
+        break;
+      default:
+        nbParameters = cmStrCat(std::to_string(required), " parameters");
+    }
     reportError(ctx, cnt->GetOriginalExpression(),
-                cmStrCat("$<PATH:", option, "> expression requires ",
-                         (exactly ? "exactly" : "at least"), ' ',
-                         (required == 1 ? "one parameter" : "two parameters"),
+                cmStrCat("$<", genex, ':', option, "> expression requires ",
+                         (exactly ? "exactly" : "at least"), ' ', nbParameters,
                          '.'));
     return false;
   }
   return true;
 };
+
+bool CheckPathParametersEx(cmGeneratorExpressionContext* ctx,
+                           const GeneratorExpressionContent* cnt,
+                           cm::string_view option, std::size_t count,
+                           int required = 1, bool exactly = true)
+{
+  return CheckGenExParameters(ctx, cnt, "PATH"_s, option, count, required,
+                              exactly);
+}
 bool CheckPathParameters(cmGeneratorExpressionContext* ctx,
                          const GeneratorExpressionContent* cnt,
                          cm::string_view option, const Arguments& args,
@@ -668,6 +704,7 @@ bool CheckPathParameters(cmGeneratorExpressionContext* ctx,
 {
   return CheckPathParametersEx(ctx, cnt, option, args.size(), required);
 };
+
 std::string ToString(bool isTrue)
 {
   return isTrue ? "1" : "0";
@@ -688,6 +725,14 @@ static const struct PathNode : public cmGeneratorExpressionNode
     const GeneratorExpressionContent* content,
     cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
   {
+    static auto processList =
+      [](std::string const& arg,
+         std::function<void(std::string&)> transform) -> std::string {
+      cmList list{ arg };
+      std::for_each(list.begin(), list.end(), std::move(transform));
+      return list.to_string();
+    };
+
     static std::unordered_map<
       cm::string_view,
       std::function<std::string(cmGeneratorExpressionContext*,
@@ -698,38 +743,49 @@ static const struct PathNode : public cmGeneratorExpressionNode
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_ROOT_NAME"_s, args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.GetRootName().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_ROOT_NAME"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetRootName().String();
+              });
+            }
+            return std::string{};
           } },
         { "GET_ROOT_DIRECTORY"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_ROOT_DIRECTORY"_s,
-                                       args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.GetRootDirectory().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_ROOT_DIRECTORY"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetRootDirectory().String();
+              });
+            }
+            return std::string{};
           } },
         { "GET_ROOT_PATH"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_ROOT_PATH"_s, args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.GetRootPath().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_ROOT_PATH"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetRootPath().String();
+              });
+            }
+            return std::string{};
           } },
         { "GET_FILENAME"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_FILENAME"_s, args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.GetFileName().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_FILENAME"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetFileName().String();
+              });
+            }
+            return std::string{};
           } },
         { "GET_EXTENSION"_s,
           [](cmGeneratorExpressionContext* ctx,
@@ -746,9 +802,14 @@ static const struct PathNode : public cmGeneratorExpressionNode
               if (args.front().empty()) {
                 return std::string{};
               }
-              return lastOnly
-                ? cmCMakePath{ args.front() }.GetExtension().String()
-                : cmCMakePath{ args.front() }.GetWideExtension().String();
+              if (lastOnly) {
+                return processList(args.front(), [](std::string& value) {
+                  value = cmCMakePath{ value }.GetExtension().String();
+                });
+              }
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetWideExtension().String();
+              });
             }
             return std::string{};
           } },
@@ -766,9 +827,14 @@ static const struct PathNode : public cmGeneratorExpressionNode
               if (args.front().empty()) {
                 return std::string{};
               }
-              return lastOnly
-                ? cmCMakePath{ args.front() }.GetStem().String()
-                : cmCMakePath{ args.front() }.GetNarrowStem().String();
+              if (lastOnly) {
+                return processList(args.front(), [](std::string& value) {
+                  value = cmCMakePath{ value }.GetStem().String();
+                });
+              }
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetNarrowStem().String();
+              });
             }
             return std::string{};
           } },
@@ -776,19 +842,24 @@ static const struct PathNode : public cmGeneratorExpressionNode
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_RELATIVE_PART"_s,
-                                       args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.GetRelativePath().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_RELATIVE_PART"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetRelativePath().String();
+              });
+            }
+            return std::string{};
           } },
         { "GET_PARENT_PATH"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "GET_PARENT_PATH"_s, args)
-              ? cmCMakePath{ args.front() }.GetParentPath().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "GET_PARENT_PATH"_s, args)) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.GetParentPath().String();
+              });
+            }
+            return std::string{};
           } },
         { "HAS_ROOT_NAME"_s,
           [](cmGeneratorExpressionContext* ctx,
@@ -904,10 +975,12 @@ static const struct PathNode : public cmGeneratorExpressionNode
                                       normalize ? "CMAKE_PATH,NORMALIZE"_s
                                                 : "CMAKE_PATH"_s,
                                       args.size(), 1)) {
-              auto path =
-                cmCMakePath{ args.front(), cmCMakePath::auto_format };
-              return normalize ? path.Normal().GenericString()
-                               : path.GenericString();
+              return processList(
+                args.front(), [normalize](std::string& value) {
+                  auto path = cmCMakePath{ value, cmCMakePath::auto_format };
+                  value = normalize ? path.Normal().GenericString()
+                                    : path.GenericString();
+                });
             }
             return std::string{};
           } },
@@ -917,11 +990,16 @@ static const struct PathNode : public cmGeneratorExpressionNode
              Arguments& args) -> std::string {
             if (CheckPathParametersEx(ctx, cnt, "APPEND"_s, args.size(), 1,
                                       false)) {
-              cmCMakePath path;
-              for (const auto& p : args) {
-                path /= p;
-              }
-              return path.String();
+              auto const& list = args.front();
+              args.advance(1);
+
+              return processList(list, [&args](std::string& value) {
+                cmCMakePath path{ value };
+                for (const auto& p : args) {
+                  path /= p;
+                }
+                value = path.String();
+              });
             }
             return std::string{};
           } },
@@ -929,20 +1007,26 @@ static const struct PathNode : public cmGeneratorExpressionNode
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "REMOVE_FILENAME"_s, args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.RemoveFileName().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "REMOVE_FILENAME"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.RemoveFileName().String();
+              });
+            }
+            return std::string{};
           } },
         { "REPLACE_FILENAME"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "REPLACE_FILENAME"_s, args, 2)
-              ? cmCMakePath{ args[0] }
-                  .ReplaceFileName(cmCMakePath{ args[1] })
-                  .String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "REPLACE_FILENAME"_s, args, 2)) {
+              return processList(args.front(), [&args](std::string& value) {
+                value = cmCMakePath{ value }
+                          .ReplaceFileName(cmCMakePath{ args[1] })
+                          .String();
+              });
+            }
+            return std::string{};
           } },
         { "REMOVE_EXTENSION"_s,
           [](cmGeneratorExpressionContext* ctx,
@@ -959,9 +1043,14 @@ static const struct PathNode : public cmGeneratorExpressionNode
               if (args.front().empty()) {
                 return std::string{};
               }
-              return lastOnly
-                ? cmCMakePath{ args.front() }.RemoveExtension().String()
-                : cmCMakePath{ args.front() }.RemoveWideExtension().String();
+              if (lastOnly) {
+                return processList(args.front(), [](std::string& value) {
+                  value = cmCMakePath{ value }.RemoveExtension().String();
+                });
+              }
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.RemoveWideExtension().String();
+              });
             }
             return std::string{};
           } },
@@ -979,13 +1068,17 @@ static const struct PathNode : public cmGeneratorExpressionNode
                                         : "REPLACE_EXTENSION"_s,
                                       args.size(), 2)) {
               if (lastOnly) {
-                return cmCMakePath{ args[0] }
-                  .ReplaceExtension(cmCMakePath{ args[1] })
-                  .String();
+                return processList(args.front(), [&args](std::string& value) {
+                  value = cmCMakePath{ value }
+                            .ReplaceExtension(cmCMakePath{ args[1] })
+                            .String();
+                });
               }
-              return cmCMakePath{ args[0] }
-                .ReplaceWideExtension(cmCMakePath{ args[1] })
-                .String();
+              return processList(args.front(), [&args](std::string& value) {
+                value = cmCMakePath{ value }
+                          .ReplaceWideExtension(cmCMakePath{ args[1] })
+                          .String();
+              });
             }
             return std::string{};
           } },
@@ -993,18 +1086,24 @@ static const struct PathNode : public cmGeneratorExpressionNode
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "NORMAL_PATH"_s, args) &&
-                !args.front().empty()
-              ? cmCMakePath{ args.front() }.Normal().String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "NORMAL_PATH"_s, args) &&
+                !args.front().empty()) {
+              return processList(args.front(), [](std::string& value) {
+                value = cmCMakePath{ value }.Normal().String();
+              });
+            }
+            return std::string{};
           } },
         { "RELATIVE_PATH"_s,
           [](cmGeneratorExpressionContext* ctx,
              const GeneratorExpressionContent* cnt,
              Arguments& args) -> std::string {
-            return CheckPathParameters(ctx, cnt, "RELATIVE_PATH"_s, args, 2)
-              ? cmCMakePath{ args[0] }.Relative(args[1]).String()
-              : std::string{};
+            if (CheckPathParameters(ctx, cnt, "RELATIVE_PATH"_s, args, 2)) {
+              return processList(args.front(), [&args](std::string& value) {
+                value = cmCMakePath{ value }.Relative(args[1]).String();
+              });
+            }
+            return std::string{};
           } },
         { "ABSOLUTE_PATH"_s,
           [](cmGeneratorExpressionContext* ctx,
@@ -1018,8 +1117,11 @@ static const struct PathNode : public cmGeneratorExpressionNode
                                       normalize ? "ABSOLUTE_PATH,NORMALIZE"_s
                                                 : "ABSOLUTE_PATH"_s,
                                       args.size(), 2)) {
-              auto path = cmCMakePath{ args[0] }.Absolute(args[1]);
-              return normalize ? path.Normal().String() : path.String();
+              return processList(
+                args.front(), [&args, normalize](std::string& value) {
+                  auto path = cmCMakePath{ value }.Absolute(args[1]);
+                  value = normalize ? path.Normal().String() : path.String();
+                });
             }
             return std::string{};
           } }
@@ -1052,6 +1154,677 @@ static const struct PathEqualNode : public cmGeneratorExpressionNode
                                                                         : "0";
   }
 } pathEqualNode;
+
+namespace {
+inline bool CheckListParametersEx(cmGeneratorExpressionContext* ctx,
+                                  const GeneratorExpressionContent* cnt,
+                                  cm::string_view option, std::size_t count,
+                                  int required = 1, bool exactly = true)
+{
+  return CheckGenExParameters(ctx, cnt, "LIST"_s, option, count, required,
+                              exactly);
+}
+inline bool CheckListParameters(cmGeneratorExpressionContext* ctx,
+                                const GeneratorExpressionContent* cnt,
+                                cm::string_view option, const Arguments& args,
+                                int required = 1)
+{
+  return CheckListParametersEx(ctx, cnt, option, args.size(), required);
+};
+
+inline cmList GetList(std::string const& list)
+{
+  return list.empty() ? cmList{} : cmList{ list, cmList::EmptyElements::Yes };
+}
+
+bool GetNumericArgument(const std::string& arg, cmList::index_type& value)
+{
+  try {
+    std::size_t pos;
+
+    if (sizeof(cmList::index_type) == sizeof(long)) {
+      value = std::stol(arg, &pos);
+    } else {
+      value = std::stoll(arg, &pos);
+    }
+
+    if (pos != arg.length()) {
+      // this is not a number
+      return false;
+    }
+  } catch (const std::invalid_argument&) {
+    return false;
+  }
+
+  return true;
+}
+
+bool GetNumericArguments(
+  cmGeneratorExpressionContext* ctx, const GeneratorExpressionContent* cnt,
+  Arguments const& args, std::vector<cmList::index_type>& indexes,
+  cmList::ExpandElements expandElements = cmList::ExpandElements::No)
+{
+  using IndexRange = cmRange<Arguments::const_iterator>;
+  IndexRange arguments(args.begin(), args.end());
+  cmList list;
+  if (expandElements == cmList::ExpandElements::Yes) {
+    list = cmList{ args.begin(), args.end(), expandElements };
+    arguments = IndexRange{ list.begin(), list.end() };
+  }
+
+  for (auto const& value : arguments) {
+    cmList::index_type index;
+    if (!GetNumericArgument(value, index)) {
+      reportError(ctx, cnt->GetOriginalExpression(),
+                  cmStrCat("index: \"", value, "\" is not a valid index"));
+      return false;
+    }
+    indexes.push_back(index);
+  }
+  return true;
+}
+}
+
+static const struct ListNode : public cmGeneratorExpressionNode
+{
+  ListNode() {} // NOLINT(modernize-use-equals-default)
+
+  int NumExpectedParameters() const override { return TwoOrMoreParameters; }
+
+  bool AcceptsArbitraryContentParameter() const override { return true; }
+
+  std::string Evaluate(
+    const std::vector<std::string>& parameters,
+    cmGeneratorExpressionContext* context,
+    const GeneratorExpressionContent* content,
+    cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
+  {
+    static std::unordered_map<
+      cm::string_view,
+      std::function<std::string(cmGeneratorExpressionContext*,
+                                const GeneratorExpressionContent*,
+                                Arguments&)>>
+      listCommands{
+        { "LENGTH"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "LENGTH"_s, args)) {
+              return std::to_string(GetList(args.front()).size());
+            }
+            return std::string{};
+          } },
+        { "GET"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "GET"_s, args.size(), 2,
+                                      false)) {
+              auto list = GetList(args.front());
+              if (list.empty()) {
+                reportError(ctx, cnt->GetOriginalExpression(),
+                            "given empty list");
+                return std::string{};
+              }
+
+              std::vector<cmList::index_type> indexes;
+              if (!GetNumericArguments(ctx, cnt, args.advance(1), indexes,
+                                       cmList::ExpandElements::Yes)) {
+                return std::string{};
+              }
+              try {
+                return list.get_items(indexes.begin(), indexes.end())
+                  .to_string();
+              } catch (std::out_of_range& e) {
+                reportError(ctx, cnt->GetOriginalExpression(), e.what());
+                return std::string{};
+              }
+            }
+            return std::string{};
+          } },
+        { "JOIN"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "JOIN"_s, args, 2)) {
+              return GetList(args.front()).join(args[1]);
+            }
+            return std::string{};
+          } },
+        { "SUBLIST"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "SUBLIST"_s, args, 3)) {
+              auto list = GetList(args.front());
+              if (!list.empty()) {
+                std::vector<cmList::index_type> indexes;
+                if (!GetNumericArguments(ctx, cnt, args.advance(1), indexes)) {
+                  return std::string{};
+                }
+                if (indexes[0] < 0) {
+                  reportError(ctx, cnt->GetOriginalExpression(),
+                              cmStrCat("begin index: ", indexes[0],
+                                       " is out of range 0 - ",
+                                       list.size() - 1));
+                  return std::string{};
+                }
+                if (indexes[1] < -1) {
+                  reportError(ctx, cnt->GetOriginalExpression(),
+                              cmStrCat("length: ", indexes[1],
+                                       " should be -1 or greater"));
+                  return std::string{};
+                }
+                try {
+                  return list
+                    .sublist(static_cast<cmList::size_type>(indexes[0]),
+                             static_cast<cmList::size_type>(indexes[1]))
+                    .to_string();
+                } catch (std::out_of_range& e) {
+                  reportError(ctx, cnt->GetOriginalExpression(), e.what());
+                  return std::string{};
+                }
+              }
+            }
+            return std::string{};
+          } },
+        { "FIND"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "FIND"_s, args, 2)) {
+              auto list = GetList(args.front());
+              auto index = list.find(args[1]);
+              return index == cmList::npos ? "-1" : std::to_string(index);
+            }
+            return std::string{};
+          } },
+        { "APPEND"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "APPEND"_s, args.size(), 2,
+                                      false)) {
+              auto list = args.front();
+              args.advance(1);
+              return cmList::append(list, args.begin(), args.end());
+            }
+            return std::string{};
+          } },
+        { "PREPEND"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "PREPEND"_s, args.size(), 2,
+                                      false)) {
+              auto list = args.front();
+              args.advance(1);
+              return cmList::prepend(list, args.begin(), args.end());
+            }
+            return std::string{};
+          } },
+        { "INSERT"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "INSERT"_s, args.size(), 3,
+                                      false)) {
+              cmList::index_type index;
+              if (!GetNumericArgument(args[1], index)) {
+                reportError(
+                  ctx, cnt->GetOriginalExpression(),
+                  cmStrCat("index: \"", args[1], "\" is not a valid index"));
+                return std::string{};
+              }
+              try {
+                auto list = GetList(args.front());
+                args.advance(2);
+                list.insert_items(index, args.begin(), args.end(),
+                                  cmList::ExpandElements::No,
+                                  cmList::EmptyElements::Yes);
+                return list.to_string();
+              } catch (std::out_of_range& e) {
+                reportError(ctx, cnt->GetOriginalExpression(), e.what());
+                return std::string{};
+              }
+            }
+            return std::string{};
+          } },
+        { "POP_BACK"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "POP_BACK"_s, args)) {
+              auto list = GetList(args.front());
+              if (!list.empty()) {
+                list.pop_back();
+                return list.to_string();
+              }
+            }
+            return std::string{};
+          } },
+        { "POP_FRONT"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "POP_FRONT"_s, args)) {
+              auto list = GetList(args.front());
+              if (!list.empty()) {
+                list.pop_front();
+                return list.to_string();
+              }
+            }
+            return std::string{};
+          } },
+        { "REMOVE_DUPLICATES"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "REMOVE_DUPLICATES"_s, args)) {
+              return GetList(args.front()).remove_duplicates().to_string();
+            }
+            return std::string{};
+          } },
+        { "REMOVE_ITEM"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "REMOVE_ITEM"_s, args.size(),
+                                      2, false)) {
+              auto list = GetList(args.front());
+              args.advance(1);
+              cmList items{ args.begin(), args.end(),
+                            cmList::ExpandElements::Yes };
+              return list.remove_items(items.begin(), items.end()).to_string();
+            }
+            return std::string{};
+          } },
+        { "REMOVE_AT"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "REMOVE_AT"_s, args.size(), 2,
+                                      false)) {
+              auto list = GetList(args.front());
+              std::vector<cmList::index_type> indexes;
+              if (!GetNumericArguments(ctx, cnt, args.advance(1), indexes,
+                                       cmList::ExpandElements::Yes)) {
+                return std::string{};
+              }
+              try {
+                return list.remove_items(indexes.begin(), indexes.end())
+                  .to_string();
+              } catch (std::out_of_range& e) {
+                reportError(ctx, cnt->GetOriginalExpression(), e.what());
+                return std::string{};
+              }
+            }
+            return std::string{};
+          } },
+        { "FILTER"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "FILTER"_s, args, 3)) {
+              auto const& op = args[1];
+              if (op != "INCLUDE"_s && op != "EXCLUDE"_s) {
+                reportError(
+                  ctx, cnt->GetOriginalExpression(),
+                  cmStrCat("sub-command FILTER does not recognize operator \"",
+                           op, "\". It must be either INCLUDE or EXCLUDE."));
+                return std::string{};
+              }
+              try {
+                return GetList(args.front())
+                  .filter(args[2],
+                          op == "INCLUDE"_s ? cmList::FilterMode::INCLUDE
+                                            : cmList::FilterMode::EXCLUDE)
+                  .to_string();
+              } catch (std::invalid_argument&) {
+                reportError(
+                  ctx, cnt->GetOriginalExpression(),
+                  cmStrCat("sub-command FILTER, failed to compile regex \"",
+                           args[2], "\"."));
+                return std::string{};
+              }
+            }
+            return std::string{};
+          } },
+        { "TRANSFORM"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "TRANSFORM"_s, args.size(), 2,
+                                      false)) {
+              auto list = GetList(args.front());
+              if (!list.empty()) {
+                struct ActionDescriptor
+                {
+                  ActionDescriptor(std::string name)
+                    : Name(std::move(name))
+                  {
+                  }
+                  ActionDescriptor(std::string name,
+                                   cmList::TransformAction action, int arity)
+                    : Name(std::move(name))
+                    , Action(action)
+                    , Arity(arity)
+                  {
+                  }
+
+                  operator const std::string&() const { return this->Name; }
+
+                  std::string Name;
+                  cmList::TransformAction Action;
+                  int Arity = 0;
+                };
+
+                static std::set<
+                  ActionDescriptor,
+                  std::function<bool(const std::string&, const std::string&)>>
+                  descriptors{
+                    { { "APPEND", cmList::TransformAction::APPEND, 1 },
+                      { "PREPEND", cmList::TransformAction::PREPEND, 1 },
+                      { "TOUPPER", cmList::TransformAction::TOUPPER, 0 },
+                      { "TOLOWER", cmList::TransformAction::TOLOWER, 0 },
+                      { "STRIP", cmList::TransformAction::STRIP, 0 },
+                      { "REPLACE", cmList::TransformAction::REPLACE, 2 } },
+                    [](const std::string& x, const std::string& y) {
+                      return x < y;
+                    }
+                  };
+
+                auto descriptor = descriptors.find(args.advance(1).front());
+                if (descriptor == descriptors.end()) {
+                  reportError(ctx, cnt->GetOriginalExpression(),
+                              cmStrCat(" sub-command TRANSFORM, ",
+                                       args.front(), " invalid action."));
+                  return std::string{};
+                }
+
+                // Action arguments
+                args.advance(1);
+                if (args.size() < descriptor->Arity) {
+                  reportError(ctx, cnt->GetOriginalExpression(),
+                              cmStrCat("sub-command TRANSFORM, action ",
+                                       descriptor->Name, " expects ",
+                                       descriptor->Arity, " argument(s)."));
+                  return std::string{};
+                }
+                std::vector<std::string> arguments;
+                if (descriptor->Arity > 0) {
+                  arguments = std::vector<std::string>(
+                    args.begin(), args.begin() + descriptor->Arity);
+                  args.advance(descriptor->Arity);
+                }
+
+                const std::string REGEX{ "REGEX" };
+                const std::string AT{ "AT" };
+                const std::string FOR{ "FOR" };
+                std::unique_ptr<cmList::TransformSelector> selector;
+
+                try {
+                  // handle optional arguments
+                  while (!args.empty()) {
+                    if ((args.front() == REGEX || args.front() == AT ||
+                         args.front() == FOR) &&
+                        selector) {
+                      reportError(ctx, cnt->GetOriginalExpression(),
+                                  cmStrCat("sub-command TRANSFORM, selector "
+                                           "already specified (",
+                                           selector->GetTag(), ")."));
+
+                      return std::string{};
+                    }
+
+                    // REGEX selector
+                    if (args.front() == REGEX) {
+                      if (args.advance(1).empty()) {
+                        reportError(
+                          ctx, cnt->GetOriginalExpression(),
+                          "sub-command TRANSFORM, selector REGEX expects "
+                          "'regular expression' argument.");
+                        return std::string{};
+                      }
+
+                      selector = cmList::TransformSelector::New<
+                        cmList::TransformSelector::REGEX>(args.front());
+
+                      args.advance(1);
+                      continue;
+                    }
+
+                    // AT selector
+                    if (args.front() == AT) {
+                      args.advance(1);
+                      // get all specified indexes
+                      std::vector<cmList::index_type> indexes;
+                      while (!args.empty()) {
+                        cmList indexList{ args.front() };
+                        for (auto const& index : indexList) {
+                          cmList::index_type value;
+
+                          if (!GetNumericArgument(index, value)) {
+                            // this is not a number, stop processing
+                            reportError(
+                              ctx, cnt->GetOriginalExpression(),
+                              cmStrCat("sub-command TRANSFORM, selector AT: '",
+                                       index, "': unexpected argument."));
+                            return std::string{};
+                          }
+                          indexes.push_back(value);
+                        }
+                        args.advance(1);
+                      }
+
+                      if (indexes.empty()) {
+                        reportError(ctx, cnt->GetOriginalExpression(),
+                                    "sub-command TRANSFORM, selector AT "
+                                    "expects at least one "
+                                    "numeric value.");
+                        return std::string{};
+                      }
+
+                      selector = cmList::TransformSelector::New<
+                        cmList::TransformSelector::AT>(std::move(indexes));
+
+                      continue;
+                    }
+
+                    // FOR selector
+                    if (args.front() == FOR) {
+                      if (args.advance(1).size() < 2) {
+                        reportError(ctx, cnt->GetOriginalExpression(),
+                                    "sub-command TRANSFORM, selector FOR "
+                                    "expects, at least,"
+                                    " two arguments.");
+                        return std::string{};
+                      }
+
+                      cmList::index_type start = 0;
+                      cmList::index_type stop = 0;
+                      cmList::index_type step = 1;
+                      bool valid = false;
+
+                      if (GetNumericArgument(args.front(), start) &&
+                          GetNumericArgument(args.advance(1).front(), stop)) {
+                        valid = true;
+                      }
+
+                      if (!valid) {
+                        reportError(
+                          ctx, cnt->GetOriginalExpression(),
+                          "sub-command TRANSFORM, selector FOR expects, "
+                          "at least, two numeric values.");
+                        return std::string{};
+                      }
+                      // try to read a third numeric value for step
+                      if (!args.advance(1).empty()) {
+                        if (!GetNumericArgument(args.front(), step)) {
+                          // this is not a number
+                          step = -1;
+                        }
+                        args.advance(1);
+                      }
+
+                      if (step <= 0) {
+                        reportError(
+                          ctx, cnt->GetOriginalExpression(),
+                          "sub-command TRANSFORM, selector FOR expects "
+                          "positive numeric value for <step>.");
+                        return std::string{};
+                      }
+
+                      selector = cmList::TransformSelector::New<
+                        cmList::TransformSelector::FOR>({ start, stop, step });
+                      continue;
+                    }
+
+                    reportError(ctx, cnt->GetOriginalExpression(),
+                                cmStrCat("sub-command TRANSFORM, '",
+                                         cmJoin(args, ", "),
+                                         "': unexpected argument(s)."));
+                    return std::string{};
+                  }
+
+                  return list
+                    .transform(descriptor->Action, arguments,
+                               std::move(selector))
+                    .to_string();
+                } catch (cmList::transform_error& e) {
+                  reportError(ctx, cnt->GetOriginalExpression(), e.what());
+                  return std::string{};
+                }
+              }
+            }
+            return std::string{};
+          } },
+        { "REVERSE"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParameters(ctx, cnt, "REVERSE"_s, args)) {
+              return GetList(args.front()).reverse().to_string();
+            }
+            return std::string{};
+          } },
+        { "SORT"_s,
+          [](cmGeneratorExpressionContext* ctx,
+             const GeneratorExpressionContent* cnt,
+             Arguments& args) -> std::string {
+            if (CheckListParametersEx(ctx, cnt, "SORT"_s, args.size(), 1,
+                                      false)) {
+              auto list = GetList(args.front());
+              args.advance(1);
+              const auto COMPARE = "COMPARE:"_s;
+              const auto CASE = "CASE:"_s;
+              const auto ORDER = "ORDER:"_s;
+              using SortConfig = cmList::SortConfiguration;
+              SortConfig sortConfig;
+              for (auto const& arg : args) {
+                if (cmHasPrefix(arg, COMPARE)) {
+                  if (sortConfig.Compare !=
+                      SortConfig::CompareMethod::DEFAULT) {
+                    reportError(ctx, cnt->GetOriginalExpression(),
+                                "sub-command SORT, COMPARE option has been "
+                                "specified multiple times.");
+                    return std::string{};
+                  }
+                  auto option =
+                    cm::string_view{ arg.c_str() + COMPARE.length() };
+                  if (option == "STRING"_s) {
+                    sortConfig.Compare = SortConfig::CompareMethod::STRING;
+                    continue;
+                  }
+                  if (option == "FILE_BASENAME"_s) {
+                    sortConfig.Compare =
+                      SortConfig::CompareMethod::FILE_BASENAME;
+                    continue;
+                  }
+                  if (option == "NATURAL"_s) {
+                    sortConfig.Compare = SortConfig::CompareMethod::NATURAL;
+                    continue;
+                  }
+                  reportError(
+                    ctx, cnt->GetOriginalExpression(),
+                    cmStrCat(
+                      "sub-command SORT, an invalid COMPARE option has been "
+                      "specified: \"",
+                      option, "\"."));
+                  return std::string{};
+                }
+                if (cmHasPrefix(arg, CASE)) {
+                  if (sortConfig.Case !=
+                      SortConfig::CaseSensitivity::DEFAULT) {
+                    reportError(ctx, cnt->GetOriginalExpression(),
+                                "sub-command SORT, CASE option has been "
+                                "specified multiple times.");
+                    return std::string{};
+                  }
+                  auto option = cm::string_view{ arg.c_str() + CASE.length() };
+                  if (option == "SENSITIVE"_s) {
+                    sortConfig.Case = SortConfig::CaseSensitivity::SENSITIVE;
+                    continue;
+                  }
+                  if (option == "INSENSITIVE"_s) {
+                    sortConfig.Case = SortConfig::CaseSensitivity::INSENSITIVE;
+                    continue;
+                  }
+                  reportError(
+                    ctx, cnt->GetOriginalExpression(),
+                    cmStrCat(
+                      "sub-command SORT, an invalid CASE option has been "
+                      "specified: \"",
+                      option, "\"."));
+                  return std::string{};
+                }
+                if (cmHasPrefix(arg, ORDER)) {
+                  if (sortConfig.Order != SortConfig::OrderMode::DEFAULT) {
+                    reportError(ctx, cnt->GetOriginalExpression(),
+                                "sub-command SORT, ORDER option has been "
+                                "specified multiple times.");
+                    return std::string{};
+                  }
+                  auto option =
+                    cm::string_view{ arg.c_str() + ORDER.length() };
+                  if (option == "ASCENDING"_s) {
+                    sortConfig.Order = SortConfig::OrderMode::ASCENDING;
+                    continue;
+                  }
+                  if (option == "DESCENDING"_s) {
+                    sortConfig.Order = SortConfig::OrderMode::DESCENDING;
+                    continue;
+                  }
+                  reportError(
+                    ctx, cnt->GetOriginalExpression(),
+                    cmStrCat(
+                      "sub-command SORT, an invalid ORDER option has been "
+                      "specified: \"",
+                      option, "\"."));
+                  return std::string{};
+                }
+                reportError(ctx, cnt->GetOriginalExpression(),
+                            cmStrCat("sub-command SORT, option \"", arg,
+                                     "\" is invalid."));
+                return std::string{};
+              }
+
+              return list.sort(sortConfig).to_string();
+            }
+            return std::string{};
+          } }
+      };
+
+    if (cm::contains(listCommands, parameters.front())) {
+      auto args = Arguments{ parameters }.advance(1);
+      return listCommands[parameters.front()](context, content, args);
+    }
+
+    reportError(context, content->GetOriginalExpression(),
+                cmStrCat(parameters.front(), ": invalid option."));
+    return std::string{};
+  }
+} listNode;
 
 static const struct MakeCIdentifierNode : public cmGeneratorExpressionNode
 {
@@ -1088,6 +1861,7 @@ struct CharacterNode : public cmGeneratorExpressionNode
 static const CharacterNode<'>'> angle_rNode;
 static const CharacterNode<','> commaNode;
 static const CharacterNode<';'> semicolonNode;
+static const CharacterNode<'"'> quoteNode;
 
 struct CompilerIdNode : public cmGeneratorExpressionNode
 {
@@ -1296,6 +2070,28 @@ static const VersionNode<cmSystemTools::OP_LESS> versionLessNode;
 static const VersionNode<cmSystemTools::OP_LESS_EQUAL> versionLessEqNode;
 static const VersionNode<cmSystemTools::OP_EQUAL> versionEqualNode;
 
+static const struct CompileOnlyNode : public cmGeneratorExpressionNode
+{
+  CompileOnlyNode() {} // NOLINT(modernize-use-equals-default)
+
+  std::string Evaluate(
+    const std::vector<std::string>& parameters,
+    cmGeneratorExpressionContext* context,
+    const GeneratorExpressionContent* content,
+    cmGeneratorExpressionDAGChecker* dagChecker) const override
+  {
+    if (!dagChecker) {
+      reportError(context, content->GetOriginalExpression(),
+                  "$<COMPILE_ONLY:...> may only be used for linking");
+      return std::string();
+    }
+    if (dagChecker->GetTransitivePropertiesOnly()) {
+      return parameters.front();
+    }
+    return std::string{};
+  }
+} compileOnlyNode;
+
 static const struct LinkOnlyNode : public cmGeneratorExpressionNode
 {
   LinkOnlyNode() {} // NOLINT(modernize-use-equals-default)
@@ -1311,7 +2107,7 @@ static const struct LinkOnlyNode : public cmGeneratorExpressionNode
                   "$<LINK_ONLY:...> may only be used for linking");
       return std::string();
     }
-    if (!dagChecker->GetTransitivePropertiesOnly()) {
+    if (!dagChecker->GetTransitivePropertiesOnlyCMP0131()) {
       return parameters.front();
     }
     return std::string();
@@ -1395,11 +2191,11 @@ static const struct ConfigurationTestNode : public cmGeneratorExpressionNode
         // This imported target has an appropriate location
         // for this (possibly mapped) config.
         // Check if there is a proper config mapping for the tested config.
-        std::vector<std::string> mappedConfigs;
+        cmList mappedConfigs;
         std::string mapProp = cmStrCat(
           "MAP_IMPORTED_CONFIG_", cmSystemTools::UpperCase(context->Config));
         if (cmValue mapValue = context->CurrentTarget->GetProperty(mapProp)) {
-          cmExpandList(cmSystemTools::UpperCase(*mapValue), mappedConfigs);
+          mappedConfigs.assign(cmSystemTools::UpperCase(*mapValue));
 
           for (auto const& param : parameters) {
             if (cm::contains(mappedConfigs, cmSystemTools::UpperCase(param))) {
@@ -1435,8 +2231,7 @@ static const struct JoinNode : public cmGeneratorExpressionNode
     const GeneratorExpressionContent* /*content*/,
     cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
   {
-    std::vector<std::string> list = cmExpandedList(parameters.front());
-    return cmJoin(list, parameters[1]);
+    return cmList{ parameters.front() }.join(parameters[1]);
   }
 } joinNode;
 
@@ -1468,7 +2263,8 @@ static const struct CompileLanguageNode : public cmGeneratorExpressionNode
         genName.find("Ninja") == std::string::npos &&
         genName.find("Visual Studio") == std::string::npos &&
         genName.find("Xcode") == std::string::npos &&
-        genName.find("Watcom WMake") == std::string::npos) {
+        genName.find("Watcom WMake") == std::string::npos &&
+        genName.find("Green Hills MULTI") == std::string::npos) {
       reportError(context, content->GetOriginalExpression(),
                   "$<COMPILE_LANGUAGE:...> not supported for this generator.");
       return std::string();
@@ -1504,7 +2300,8 @@ static const struct CompileLanguageAndIdNode : public cmGeneratorExpressionNode
       // reportError(context, content->GetOriginalExpression(), "");
       reportError(
         context, content->GetOriginalExpression(),
-        "$<COMPILE_LANG_AND_ID:lang,id> may only be used with binary targets "
+        "$<COMPILE_LANG_AND_ID:lang,id> may only be used with binary "
+        "targets "
         "to specify include directories, compile definitions, and compile "
         "options.  It may not be used with the add_custom_command, "
         "add_custom_target, or file(GENERATE) commands.");
@@ -1516,7 +2313,8 @@ static const struct CompileLanguageAndIdNode : public cmGeneratorExpressionNode
         genName.find("Ninja") == std::string::npos &&
         genName.find("Visual Studio") == std::string::npos &&
         genName.find("Xcode") == std::string::npos &&
-        genName.find("Watcom WMake") == std::string::npos) {
+        genName.find("Watcom WMake") == std::string::npos &&
+        genName.find("Green Hills MULTI") == std::string::npos) {
       reportError(
         context, content->GetOriginalExpression(),
         "$<COMPILE_LANG_AND_ID:lang,id> not supported for this generator.");
@@ -1548,7 +2346,8 @@ static const struct LinkLanguageNode : public cmGeneratorExpressionNode
   {
     if (!context->HeadTarget || !dagChecker ||
         !(dagChecker->EvaluatingLinkExpression() ||
-          dagChecker->EvaluatingLinkLibraries())) {
+          dagChecker->EvaluatingLinkLibraries() ||
+          dagChecker->EvaluatingLinkerLauncher())) {
       reportError(context, content->GetOriginalExpression(),
                   "$<LINK_LANGUAGE:...> may only be used with binary targets "
                   "to specify link libraries, link directories, link options "
@@ -1568,7 +2367,8 @@ static const struct LinkLanguageNode : public cmGeneratorExpressionNode
         genName.find("Ninja") == std::string::npos &&
         genName.find("Visual Studio") == std::string::npos &&
         genName.find("Xcode") == std::string::npos &&
-        genName.find("Watcom WMake") == std::string::npos) {
+        genName.find("Watcom WMake") == std::string::npos &&
+        genName.find("Green Hills MULTI") == std::string::npos) {
       reportError(context, content->GetOriginalExpression(),
                   "$<LINK_LANGUAGE:...> not supported for this generator.");
       return std::string();
@@ -1641,11 +2441,13 @@ static const struct LinkLanguageAndIdNode : public cmGeneratorExpressionNode
   {
     if (!context->HeadTarget || !dagChecker ||
         !(dagChecker->EvaluatingLinkExpression() ||
-          dagChecker->EvaluatingLinkLibraries())) {
+          dagChecker->EvaluatingLinkLibraries() ||
+          dagChecker->EvaluatingLinkerLauncher())) {
       reportError(
         context, content->GetOriginalExpression(),
         "$<LINK_LANG_AND_ID:lang,id> may only be used with binary targets "
-        "to specify link libraries, link directories, link options, and link "
+        "to specify link libraries, link directories, link options, and "
+        "link "
         "depends.");
       return std::string();
     }
@@ -1656,7 +2458,8 @@ static const struct LinkLanguageAndIdNode : public cmGeneratorExpressionNode
         genName.find("Ninja") == std::string::npos &&
         genName.find("Visual Studio") == std::string::npos &&
         genName.find("Xcode") == std::string::npos &&
-        genName.find("Watcom WMake") == std::string::npos) {
+        genName.find("Watcom WMake") == std::string::npos &&
+        genName.find("Green Hills MULTI") == std::string::npos) {
       reportError(
         context, content->GetOriginalExpression(),
         "$<LINK_LANG_AND_ID:lang,id> not supported for this generator.");
@@ -1703,8 +2506,7 @@ static const struct LinkLibraryNode : public cmGeneratorExpressionNode
       return std::string();
     }
 
-    std::vector<std::string> list;
-    cmExpandLists(parameters.begin(), parameters.end(), list);
+    cmList list{ parameters.begin(), parameters.end() };
     if (list.empty()) {
       reportError(
         context, content->GetOriginalExpression(),
@@ -1760,7 +2562,7 @@ static const struct LinkLibraryNode : public cmGeneratorExpressionNode
     list.front() = LL_BEGIN;
     list.push_back(LL_END);
 
-    return cmJoin(list, ";"_s);
+    return list.to_string();
   }
 } linkLibraryNode;
 
@@ -1789,8 +2591,7 @@ static const struct LinkGroupNode : public cmGeneratorExpressionNode
       return std::string();
     }
 
-    std::vector<std::string> list;
-    cmExpandLists(parameters.begin(), parameters.end(), list);
+    cmList list{ parameters.begin(), parameters.end() };
     if (list.empty()) {
       reportError(
         context, content->GetOriginalExpression(),
@@ -1830,7 +2631,7 @@ static const struct LinkGroupNode : public cmGeneratorExpressionNode
     list.front() = LG_BEGIN;
     list.push_back(LG_END);
 
-    return cmJoin(list, ";"_s);
+    return list.to_string();
   }
 } linkGroupNode;
 
@@ -1855,7 +2656,7 @@ static const struct HostLinkNode : public cmGeneratorExpressionNode
     }
 
     return context->HeadTarget->IsDeviceLink() ? std::string()
-                                               : cmJoin(parameters, ";");
+                                               : cmList::to_string(parameters);
   }
 } hostLinkNode;
 
@@ -1880,8 +2681,7 @@ static const struct DeviceLinkNode : public cmGeneratorExpressionNode
     }
 
     if (context->HeadTarget->IsDeviceLink()) {
-      std::vector<std::string> list;
-      cmExpandLists(parameters.begin(), parameters.end(), list);
+      cmList list{ parameters.begin(), parameters.end() };
       const auto DL_BEGIN = "<DEVICE_LINK>"_s;
       const auto DL_END = "</DEVICE_LINK>"_s;
       cm::erase_if(list, [&](const std::string& item) {
@@ -1891,7 +2691,7 @@ static const struct DeviceLinkNode : public cmGeneratorExpressionNode
       list.insert(list.begin(), static_cast<std::string>(DL_BEGIN));
       list.push_back(static_cast<std::string>(DL_END));
 
-      return cmJoin(list, ";");
+      return list.to_string();
     }
 
     return std::string();
@@ -1901,12 +2701,12 @@ static const struct DeviceLinkNode : public cmGeneratorExpressionNode
 static std::string getLinkedTargetsContent(
   cmGeneratorTarget const* target, std::string const& prop,
   cmGeneratorExpressionContext* context,
-  cmGeneratorExpressionDAGChecker* dagChecker)
+  cmGeneratorExpressionDAGChecker* dagChecker, cmGeneratorTarget::UseTo usage)
 {
   std::string result;
   if (cmLinkImplementationLibraries const* impl =
         target->GetLinkImplementationLibraries(
-          context->Config, cmGeneratorTarget::LinkInterfaceFor::Usage)) {
+          context->Config, cmGeneratorTarget::UseTo::Compile)) {
     for (cmLinkImplItem const& lib : impl->Libraries) {
       if (lib.Target) {
         // Pretend $<TARGET_PROPERTY:lib.Target,prop> appeared in our
@@ -1916,8 +2716,8 @@ static std::string getLinkedTargetsContent(
           target->GetLocalGenerator(), context->Config, context->Quiet, target,
           target, context->EvaluateForBuildsystem, lib.Backtrace,
           context->Language);
-        std::string libResult =
-          lib.Target->EvaluateInterfaceProperty(prop, &libContext, dagChecker);
+        std::string libResult = lib.Target->EvaluateInterfaceProperty(
+          prop, &libContext, dagChecker, usage);
         if (!libResult.empty()) {
           if (result.empty()) {
             result = std::move(libResult);
@@ -2026,7 +2826,8 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
         reportError(
           context, content->GetOriginalExpression(),
           "$<TARGET_PROPERTY:prop>  may only be used with binary targets.  "
-          "It may not be used with add_custom_command or add_custom_target.  "
+          "It may not be used with add_custom_command or add_custom_target. "
+          " "
           " "
           "Specify the target to read a property from using the "
           "$<TARGET_PROPERTY:tgt,prop> signature instead.");
@@ -2074,31 +2875,24 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
 
     std::string interfacePropertyName;
     bool isInterfaceProperty = false;
+    cmGeneratorTarget::UseTo usage = cmGeneratorTarget::UseTo::Compile;
 
-#define POPULATE_INTERFACE_PROPERTY_NAME(prop)                                \
-  if (propertyName == #prop) {                                                \
-    interfacePropertyName = "INTERFACE_" #prop;                               \
-  } else if (propertyName == "INTERFACE_" #prop) {                            \
-    interfacePropertyName = "INTERFACE_" #prop;                               \
-    isInterfaceProperty = true;                                               \
-  } else
-
-    CM_FOR_EACH_TRANSITIVE_PROPERTY_NAME(POPULATE_INTERFACE_PROPERTY_NAME)
-    // Note that the above macro terminates with an else
-    /* else */ if (cmHasLiteralPrefix(propertyName, "COMPILE_DEFINITIONS_")) {
-      cmPolicies::PolicyStatus polSt =
-        context->LG->GetPolicyStatus(cmPolicies::CMP0043);
-      if (polSt == cmPolicies::WARN || polSt == cmPolicies::OLD) {
-        interfacePropertyName = "INTERFACE_COMPILE_DEFINITIONS";
-      }
+    if (cm::optional<cmGeneratorTarget::TransitiveProperty> transitiveProp =
+          target->IsTransitiveProperty(propertyName, context->LG)) {
+      interfacePropertyName = std::string(transitiveProp->InterfaceName);
+      isInterfaceProperty = transitiveProp->InterfaceName == propertyName;
+      usage = transitiveProp->Usage;
     }
-#undef POPULATE_INTERFACE_PROPERTY_NAME
 
     bool evaluatingLinkLibraries = false;
 
     if (dagCheckerParent) {
+      // This $<TARGET_PROPERTY:...> node has been reached while evaluating
+      // another target property value.  Check that the outermost evaluation
+      // expects such nested evaluations.
       if (dagCheckerParent->EvaluatingGenexExpression() ||
-          dagCheckerParent->EvaluatingPICExpression()) {
+          dagCheckerParent->EvaluatingPICExpression() ||
+          dagCheckerParent->EvaluatingLinkerLauncher()) {
         // No check required.
       } else if (dagCheckerParent->EvaluatingLinkLibraries()) {
         evaluatingLinkLibraries = true;
@@ -2111,21 +2905,19 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
           return std::string();
         }
       } else {
-#define ASSERT_TRANSITIVE_PROPERTY_METHOD(METHOD) dagCheckerParent->METHOD() ||
-        assert(CM_FOR_EACH_TRANSITIVE_PROPERTY_METHOD(
-          ASSERT_TRANSITIVE_PROPERTY_METHOD) false); // NOLINT(clang-tidy)
-#undef ASSERT_TRANSITIVE_PROPERTY_METHOD
+        assert(dagCheckerParent->EvaluatingTransitiveProperty());
       }
     }
 
     if (isInterfaceProperty) {
       return cmGeneratorExpression::StripEmptyListElements(
         target->EvaluateInterfaceProperty(propertyName, context,
-                                          dagCheckerParent));
+                                          dagCheckerParent, usage));
     }
 
-    cmGeneratorExpressionDAGChecker dagChecker(
-      context->Backtrace, target, propertyName, content, dagCheckerParent);
+    cmGeneratorExpressionDAGChecker dagChecker(context->Backtrace, target,
+                                               propertyName, content,
+                                               dagCheckerParent, context->LG);
 
     switch (dagChecker.Check()) {
       case cmGeneratorExpressionDAGChecker::SELF_REFERENCE:
@@ -2150,8 +2942,20 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
       return std::string();
     }
 
-    if (!haveProp && !target->IsImported() &&
-        target->GetType() != cmStateEnums::INTERFACE_LIBRARY) {
+    // Properties named by COMPATIBLE_INTERFACE_ properties combine over
+    // the transitive link closure as a single order-independent value.
+    // Imported targets do not themselves have a defined value for these
+    // properties, but they can contribute to the value of a non-imported
+    // dependent.
+    //
+    // For COMPATIBLE_INTERFACE_{BOOL,STRING}:
+    // * If set on this target, use the value directly.  It is checked
+    //   elsewhere for consistency over the transitive link closure.
+    // * If not set on this target, compute the value from the closure.
+    //
+    // For COMPATIBLE_INTERFACE_NUMBER_{MAX,MIN} we always compute the value
+    // from this target and the transitive link closure to get the max or min.
+    if (!haveProp && !target->IsImported()) {
       if (target->IsLinkInterfaceDependentBoolProperty(propertyName,
                                                        context->Config)) {
         context->HadContextSensitiveCondition = true;
@@ -2168,6 +2972,8 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
                                                           context->Config);
         return propContent ? propContent : "";
       }
+    }
+    if (!evaluatingLinkLibraries && !target->IsImported()) {
       if (target->IsLinkInterfaceDependentNumberMinProperty(propertyName,
                                                             context->Config)) {
         context->HadContextSensitiveCondition = true;
@@ -2186,32 +2992,14 @@ static const struct TargetPropertyNode : public cmGeneratorExpressionNode
       }
     }
 
-    if (!target->IsImported() && dagCheckerParent &&
-        !dagCheckerParent->EvaluatingLinkLibraries()) {
-      if (target->IsLinkInterfaceDependentNumberMinProperty(propertyName,
-                                                            context->Config)) {
-        context->HadContextSensitiveCondition = true;
-        const char* propContent =
-          target->GetLinkInterfaceDependentNumberMinProperty(propertyName,
-                                                             context->Config);
-        return propContent ? propContent : "";
-      }
-      if (target->IsLinkInterfaceDependentNumberMaxProperty(propertyName,
-                                                            context->Config)) {
-        context->HadContextSensitiveCondition = true;
-        const char* propContent =
-          target->GetLinkInterfaceDependentNumberMaxProperty(propertyName,
-                                                             context->Config);
-        return propContent ? propContent : "";
-      }
-    }
-
+    // Some properties, such as usage requirements, combine over the
+    // transitive link closure as an ordered list.
     if (!interfacePropertyName.empty()) {
       result = cmGeneratorExpression::StripEmptyListElements(
         this->EvaluateDependentExpression(result, context->LG, context, target,
                                           &dagChecker, target));
       std::string linkedTargetsContent = getLinkedTargetsContent(
-        target, interfacePropertyName, context, &dagChecker);
+        target, interfacePropertyName, context, &dagChecker, usage);
       if (!linkedTargetsContent.empty()) {
         result += (result.empty() ? "" : ";") + linkedTargetsContent;
       }
@@ -2290,14 +3078,14 @@ static const struct TargetObjectsNode : public cmGeneratorExpressionNode
       }
     }
 
-    std::vector<std::string> objects;
+    cmList objects;
 
     if (gt->IsImported()) {
       cmValue loc = nullptr;
       cmValue imp = nullptr;
       std::string suffix;
       if (gt->Target->GetMappedConfig(context->Config, loc, imp, suffix)) {
-        cmExpandList(*loc, objects);
+        objects.assign(*loc);
       }
       context->HadContextSensitiveCondition = true;
     } else {
@@ -2315,7 +3103,7 @@ static const struct TargetObjectsNode : public cmGeneratorExpressionNode
         context->HadContextSensitiveCondition = true;
       }
 
-      for (std::string& o : objects) {
+      for (auto& o : objects) {
         o = cmStrCat(obj_dir, o);
       }
     }
@@ -2326,19 +3114,16 @@ static const struct TargetObjectsNode : public cmGeneratorExpressionNode
       mf->AddTargetObject(tgtName, o);
     }
 
-    return cmJoin(objects, ";");
+    return objects.to_string();
   }
 } targetObjectsNode;
 
-static const struct TargetRuntimeDllsNode : public cmGeneratorExpressionNode
+struct TargetRuntimeDllsBaseNode : public cmGeneratorExpressionNode
 {
-  TargetRuntimeDllsNode() {} // NOLINT(modernize-use-equals-default)
-
-  std::string Evaluate(
+  std::vector<std::string> CollectDlls(
     const std::vector<std::string>& parameters,
     cmGeneratorExpressionContext* context,
-    const GeneratorExpressionContent* content,
-    cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
+    const GeneratorExpressionContent* content) const
   {
     std::string const& tgtName = parameters.front();
     cmGeneratorTarget* gt = context->LG->FindGeneratorTargetToUse(tgtName);
@@ -2347,7 +3132,7 @@ static const struct TargetRuntimeDllsNode : public cmGeneratorExpressionNode
       e << "Objects of target \"" << tgtName
         << "\" referenced but no such target exists.";
       reportError(context, content->GetOriginalExpression(), e.str());
-      return std::string();
+      return std::vector<std::string>();
     }
     cmStateEnums::TargetType type = gt->GetType();
     if (type != cmStateEnums::EXECUTABLE &&
@@ -2358,7 +3143,7 @@ static const struct TargetRuntimeDllsNode : public cmGeneratorExpressionNode
         << "\" referenced but is not one of the allowed target types "
         << "(EXECUTABLE, SHARED, MODULE).";
       reportError(context, content->GetOriginalExpression(), e.str());
-      return std::string();
+      return std::vector<std::string>();
     }
 
     if (auto* cli = gt->GetLinkInformation(context->Config)) {
@@ -2371,12 +3156,50 @@ static const struct TargetRuntimeDllsNode : public cmGeneratorExpressionNode
         }
       }
 
-      return cmJoin(dllPaths, ";");
+      return dllPaths;
     }
 
-    return "";
+    return std::vector<std::string>();
+  }
+};
+
+static const struct TargetRuntimeDllsNode : public TargetRuntimeDllsBaseNode
+{
+  TargetRuntimeDllsNode() {} // NOLINT(modernize-use-equals-default)
+
+  std::string Evaluate(
+    const std::vector<std::string>& parameters,
+    cmGeneratorExpressionContext* context,
+    const GeneratorExpressionContent* content,
+    cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
+  {
+    std::vector<std::string> dlls = CollectDlls(parameters, context, content);
+    return cmList::to_string(dlls);
   }
 } targetRuntimeDllsNode;
+
+static const struct TargetRuntimeDllDirsNode : public TargetRuntimeDllsBaseNode
+{
+  TargetRuntimeDllDirsNode() {} // NOLINT(modernize-use-equals-default)
+
+  std::string Evaluate(
+    const std::vector<std::string>& parameters,
+    cmGeneratorExpressionContext* context,
+    const GeneratorExpressionContent* content,
+    cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
+  {
+    std::vector<std::string> dlls = CollectDlls(parameters, context, content);
+    std::vector<std::string> dllDirs;
+    for (const std::string& dll : dlls) {
+      std::string directory = cmSystemTools::GetFilenamePath(dll);
+      if (std::find(dllDirs.begin(), dllDirs.end(), directory) ==
+          dllDirs.end()) {
+        dllDirs.push_back(directory);
+      }
+    }
+    return cmList::to_string(dllDirs);
+  }
+} targetRuntimeDllDirsNode;
 
 static const struct CompileFeaturesNode : public cmGeneratorExpressionNode
 {
@@ -2400,7 +3223,7 @@ static const struct CompileFeaturesNode : public cmGeneratorExpressionNode
     }
     context->HadHeadSensitiveCondition = true;
 
-    using LangMap = std::map<std::string, std::vector<std::string>>;
+    using LangMap = std::map<std::string, cmList>;
     static LangMap availableFeatures;
 
     LangMap testedFeatures;
@@ -2422,7 +3245,7 @@ static const struct CompileFeaturesNode : public cmGeneratorExpressionNode
           reportError(context, content->GetOriginalExpression(), error);
           return std::string();
         }
-        cmExpandList(featuresKnown, availableFeatures[lang]);
+        availableFeatures[lang].assign(featuresKnown);
       }
     }
 
@@ -2586,10 +3409,14 @@ static const struct InstallPrefixNode : public cmGeneratorExpressionNode
 
 class ArtifactDirTag;
 class ArtifactLinkerTag;
+class ArtifactLinkerLibraryTag;
+class ArtifactLinkerImportTag;
 class ArtifactNameTag;
+class ArtifactImportTag;
 class ArtifactPathTag;
 class ArtifactPdbTag;
 class ArtifactSonameTag;
+class ArtifactSonameImportTag;
 class ArtifactBundleDirTag;
 class ArtifactBundleDirNameTag;
 class ArtifactBundleContentDirTag;
@@ -2699,6 +3526,38 @@ struct TargetFilesystemArtifactResultCreator<ArtifactSonameTag>
 };
 
 template <>
+struct TargetFilesystemArtifactResultCreator<ArtifactSonameImportTag>
+{
+  static std::string Create(cmGeneratorTarget* target,
+                            cmGeneratorExpressionContext* context,
+                            const GeneratorExpressionContent* content)
+  {
+    // The target soname file (.so.1).
+    if (target->IsDLLPlatform()) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_SONAME_IMPORT_FILE is not allowed "
+                    "for DLL target platforms.");
+      return std::string();
+    }
+    if (target->GetType() != cmStateEnums::SHARED_LIBRARY) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_SONAME_IMPORT_FILE is allowed only for "
+                    "SHARED libraries.");
+      return std::string();
+    }
+
+    if (target->HasImportLibrary(context->Config)) {
+      return cmStrCat(target->GetDirectory(
+                        context->Config, cmStateEnums::ImportLibraryArtifact),
+                      '/',
+                      target->GetSOName(context->Config,
+                                        cmStateEnums::ImportLibraryArtifact));
+    }
+    return std::string{};
+  }
+};
+
+template <>
 struct TargetFilesystemArtifactResultCreator<ArtifactPdbTag>
 {
   static std::string Create(cmGeneratorTarget* target,
@@ -2745,7 +3604,8 @@ struct TargetFilesystemArtifactResultCreator<ArtifactLinkerTag>
                             cmGeneratorExpressionContext* context,
                             const GeneratorExpressionContent* content)
   {
-    // The file used to link to the target (.so, .lib, .a).
+    // The file used to link to the target (.so, .lib, .a) or import file
+    // (.lib,  .tbd).
     if (!target->IsLinkable()) {
       ::reportError(context, content->GetOriginalExpression(),
                     "TARGET_LINKER_FILE is allowed only for libraries and "
@@ -2757,6 +3617,55 @@ struct TargetFilesystemArtifactResultCreator<ArtifactLinkerTag>
       ? cmStateEnums::ImportLibraryArtifact
       : cmStateEnums::RuntimeBinaryArtifact;
     return target->GetFullPath(context->Config, artifact);
+  }
+};
+
+template <>
+struct TargetFilesystemArtifactResultCreator<ArtifactLinkerLibraryTag>
+{
+  static std::string Create(cmGeneratorTarget* target,
+                            cmGeneratorExpressionContext* context,
+                            const GeneratorExpressionContent* content)
+  {
+    // The file used to link to the target (.dylib, .so, .a).
+    if (!target->IsLinkable() ||
+        target->GetType() == cmStateEnums::EXECUTABLE) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_LINKER_LIBRARY_FILE is allowed only for libraries "
+                    "with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (!target->IsDLLPlatform() ||
+        target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+      return target->GetFullPath(context->Config,
+                                 cmStateEnums::RuntimeBinaryArtifact);
+    }
+    return std::string{};
+  }
+};
+
+template <>
+struct TargetFilesystemArtifactResultCreator<ArtifactLinkerImportTag>
+{
+  static std::string Create(cmGeneratorTarget* target,
+                            cmGeneratorExpressionContext* context,
+                            const GeneratorExpressionContent* content)
+  {
+    // The file used to link to the target (.lib, .tbd).
+    if (!target->IsLinkable()) {
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_IMPORT_FILE is allowed only for libraries and "
+        "executables with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFullPath(context->Config,
+                                 cmStateEnums::ImportLibraryArtifact);
+    }
+    return std::string{};
   }
 };
 
@@ -2854,6 +3763,21 @@ struct TargetFilesystemArtifactResultCreator<ArtifactNameTag>
   {
     return target->GetFullPath(context->Config,
                                cmStateEnums::RuntimeBinaryArtifact, true);
+  }
+};
+
+template <>
+struct TargetFilesystemArtifactResultCreator<ArtifactImportTag>
+{
+  static std::string Create(cmGeneratorTarget* target,
+                            cmGeneratorExpressionContext* context,
+                            const GeneratorExpressionContent* /*unused*/)
+  {
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFullPath(context->Config,
+                                 cmStateEnums::ImportLibraryArtifact, true);
+    }
+    return std::string{};
   }
 };
 
@@ -2982,11 +3906,23 @@ struct TargetFilesystemArtifactNodeGroup
 static const TargetFilesystemArtifactNodeGroup<ArtifactNameTag>
   targetNodeGroup;
 
+static const TargetFilesystemArtifactNodeGroup<ArtifactImportTag>
+  targetImportNodeGroup;
+
 static const TargetFilesystemArtifactNodeGroup<ArtifactLinkerTag>
   targetLinkerNodeGroup;
 
+static const TargetFilesystemArtifactNodeGroup<ArtifactLinkerLibraryTag>
+  targetLinkerLibraryNodeGroup;
+
+static const TargetFilesystemArtifactNodeGroup<ArtifactLinkerImportTag>
+  targetLinkerImportNodeGroup;
+
 static const TargetFilesystemArtifactNodeGroup<ArtifactSonameTag>
   targetSoNameNodeGroup;
+
+static const TargetFilesystemArtifactNodeGroup<ArtifactSonameImportTag>
+  targetSoNameImportNodeGroup;
 
 static const TargetFilesystemArtifactNodeGroup<ArtifactPdbTag>
   targetPdbNodeGroup;
@@ -3027,13 +3963,30 @@ struct TargetOutputNameArtifactResultGetter<ArtifactNameTag>
 };
 
 template <>
+struct TargetOutputNameArtifactResultGetter<ArtifactImportTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* /*unused*/)
+  {
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetOutputName(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact) +
+        target->GetFilePostfix(context->Config);
+    }
+    return std::string{};
+  }
+};
+
+template <>
 struct TargetOutputNameArtifactResultGetter<ArtifactLinkerTag>
 {
   static std::string Get(cmGeneratorTarget* target,
                          cmGeneratorExpressionContext* context,
                          const GeneratorExpressionContent* content)
   {
-    // The file used to link to the target (.so, .lib, .a).
+    // The library file used to link to the target (.so, .lib, .a) or import
+    // file (.lin,  .tbd).
     if (!target->IsLinkable()) {
       ::reportError(context, content->GetOriginalExpression(),
                     "TARGET_LINKER_FILE_BASE_NAME is allowed only for "
@@ -3046,6 +3999,56 @@ struct TargetOutputNameArtifactResultGetter<ArtifactLinkerTag>
       : cmStateEnums::RuntimeBinaryArtifact;
     return target->GetOutputName(context->Config, artifact) +
       target->GetFilePostfix(context->Config);
+  }
+};
+
+template <>
+struct TargetOutputNameArtifactResultGetter<ArtifactLinkerLibraryTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    // The library file used to link to the target (.so, .lib, .a).
+    if (!target->IsLinkable() ||
+        target->GetType() == cmStateEnums::EXECUTABLE) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_LINKER_LIBRARY_FILE_BASE_NAME is allowed only for "
+                    "libraries with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (!target->IsDLLPlatform() ||
+        target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+      return target->GetOutputName(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact) +
+        target->GetFilePostfix(context->Config);
+    }
+    return std::string{};
+  }
+};
+
+template <>
+struct TargetOutputNameArtifactResultGetter<ArtifactLinkerImportTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    // The import file used to link to the target (.lib, .tbd).
+    if (!target->IsLinkable()) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_LINKER_IMPORT_FILE_BASE_NAME is allowed only for "
+                    "libraries and executables with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetOutputName(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact) +
+        target->GetFilePostfix(context->Config);
+    }
+    return std::string{};
   }
 };
 
@@ -3120,15 +4123,27 @@ struct TargetFileBaseNameArtifact : public TargetArtifactBase
 
 static const TargetFileBaseNameArtifact<ArtifactNameTag>
   targetFileBaseNameNode;
+static const TargetFileBaseNameArtifact<ArtifactImportTag>
+  targetImportFileBaseNameNode;
 static const TargetFileBaseNameArtifact<ArtifactLinkerTag>
   targetLinkerFileBaseNameNode;
+static const TargetFileBaseNameArtifact<ArtifactLinkerLibraryTag>
+  targetLinkerLibraryFileBaseNameNode;
+static const TargetFileBaseNameArtifact<ArtifactLinkerImportTag>
+  targetLinkerImportFileBaseNameNode;
 static const TargetFileBaseNameArtifact<ArtifactPdbTag>
   targetPdbFileBaseNameNode;
 
 class ArtifactFilePrefixTag;
+class ArtifactImportFilePrefixTag;
 class ArtifactLinkerFilePrefixTag;
+class ArtifactLinkerLibraryFilePrefixTag;
+class ArtifactLinkerImportFilePrefixTag;
 class ArtifactFileSuffixTag;
+class ArtifactImportFileSuffixTag;
 class ArtifactLinkerFileSuffixTag;
+class ArtifactLinkerLibraryFileSuffixTag;
+class ArtifactLinkerImportFileSuffixTag;
 
 template <typename ArtifactT>
 struct TargetFileArtifactResultGetter
@@ -3149,6 +4164,20 @@ struct TargetFileArtifactResultGetter<ArtifactFilePrefixTag>
   }
 };
 template <>
+struct TargetFileArtifactResultGetter<ArtifactImportFilePrefixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent*)
+  {
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFilePrefix(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact);
+    }
+    return std::string{};
+  }
+};
+template <>
 struct TargetFileArtifactResultGetter<ArtifactLinkerFilePrefixTag>
 {
   static std::string Get(cmGeneratorTarget* target,
@@ -3156,9 +4185,10 @@ struct TargetFileArtifactResultGetter<ArtifactLinkerFilePrefixTag>
                          const GeneratorExpressionContent* content)
   {
     if (!target->IsLinkable()) {
-      ::reportError(context, content->GetOriginalExpression(),
-                    "TARGET_LINKER_PREFIX is allowed only for libraries and "
-                    "executables with ENABLE_EXPORTS.");
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_FILE_PREFIX is allowed only for libraries and "
+        "executables with ENABLE_EXPORTS.");
       return std::string();
     }
 
@@ -3168,6 +4198,52 @@ struct TargetFileArtifactResultGetter<ArtifactLinkerFilePrefixTag>
       : cmStateEnums::RuntimeBinaryArtifact;
 
     return target->GetFilePrefix(context->Config, artifact);
+  }
+};
+template <>
+struct TargetFileArtifactResultGetter<ArtifactLinkerLibraryFilePrefixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    if (!target->IsLinkable() ||
+        target->GetType() == cmStateEnums::EXECUTABLE) {
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_LIBRARY_FILE_PREFIX is allowed only for libraries "
+        "with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (!target->IsDLLPlatform() ||
+        target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+      return target->GetFilePrefix(context->Config,
+                                   cmStateEnums::RuntimeBinaryArtifact);
+    }
+    return std::string{};
+  }
+};
+template <>
+struct TargetFileArtifactResultGetter<ArtifactLinkerImportFilePrefixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    if (!target->IsLinkable()) {
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_IMPORT_FILE_PREFIX is allowed only for libraries and "
+        "executables with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFilePrefix(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact);
+    }
+    return std::string{};
   }
 };
 template <>
@@ -3181,6 +4257,20 @@ struct TargetFileArtifactResultGetter<ArtifactFileSuffixTag>
   }
 };
 template <>
+struct TargetFileArtifactResultGetter<ArtifactImportFileSuffixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent*)
+  {
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFileSuffix(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact);
+    }
+    return std::string{};
+  }
+};
+template <>
 struct TargetFileArtifactResultGetter<ArtifactLinkerFileSuffixTag>
 {
   static std::string Get(cmGeneratorTarget* target,
@@ -3188,9 +4278,10 @@ struct TargetFileArtifactResultGetter<ArtifactLinkerFileSuffixTag>
                          const GeneratorExpressionContent* content)
   {
     if (!target->IsLinkable()) {
-      ::reportError(context, content->GetOriginalExpression(),
-                    "TARGET_LINKER_SUFFIX is allowed only for libraries and "
-                    "executables with ENABLE_EXPORTS.");
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_FILE_SUFFIX is allowed only for libraries and "
+        "executables with ENABLE_EXPORTS.");
       return std::string();
     }
 
@@ -3200,6 +4291,51 @@ struct TargetFileArtifactResultGetter<ArtifactLinkerFileSuffixTag>
       : cmStateEnums::RuntimeBinaryArtifact;
 
     return target->GetFileSuffix(context->Config, artifact);
+  }
+};
+template <>
+struct TargetFileArtifactResultGetter<ArtifactLinkerLibraryFileSuffixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    if (!target->IsLinkable() ||
+        target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+      ::reportError(context, content->GetOriginalExpression(),
+                    "TARGET_LINKER_LIBRARY_FILE_SUFFIX is allowed only for "
+                    "libraries with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (!target->IsDLLPlatform() ||
+        target->GetType() == cmStateEnums::STATIC_LIBRARY) {
+      return target->GetFileSuffix(context->Config,
+                                   cmStateEnums::RuntimeBinaryArtifact);
+    }
+    return std::string{};
+  }
+};
+template <>
+struct TargetFileArtifactResultGetter<ArtifactLinkerImportFileSuffixTag>
+{
+  static std::string Get(cmGeneratorTarget* target,
+                         cmGeneratorExpressionContext* context,
+                         const GeneratorExpressionContent* content)
+  {
+    if (!target->IsLinkable()) {
+      ::reportError(
+        context, content->GetOriginalExpression(),
+        "TARGET_LINKER_IMPORT_FILE_SUFFIX is allowed only for libraries and "
+        "executables with ENABLE_EXPORTS.");
+      return std::string();
+    }
+
+    if (target->HasImportLibrary(context->Config)) {
+      return target->GetFileSuffix(context->Config,
+                                   cmStateEnums::ImportLibraryArtifact);
+    }
+    return std::string{};
   }
 };
 
@@ -3232,11 +4368,23 @@ struct TargetFileArtifact : public TargetArtifactBase
 };
 
 static const TargetFileArtifact<ArtifactFilePrefixTag> targetFilePrefixNode;
+static const TargetFileArtifact<ArtifactImportFilePrefixTag>
+  targetImportFilePrefixNode;
 static const TargetFileArtifact<ArtifactLinkerFilePrefixTag>
   targetLinkerFilePrefixNode;
+static const TargetFileArtifact<ArtifactLinkerLibraryFilePrefixTag>
+  targetLinkerLibraryFilePrefixNode;
+static const TargetFileArtifact<ArtifactLinkerImportFilePrefixTag>
+  targetLinkerImportFilePrefixNode;
 static const TargetFileArtifact<ArtifactFileSuffixTag> targetFileSuffixNode;
+static const TargetFileArtifact<ArtifactImportFileSuffixTag>
+  targetImportFileSuffixNode;
 static const TargetFileArtifact<ArtifactLinkerFileSuffixTag>
   targetLinkerFileSuffixNode;
+static const TargetFileArtifact<ArtifactLinkerLibraryFileSuffixTag>
+  targetLinkerLibraryFileSuffixNode;
+static const TargetFileArtifact<ArtifactLinkerImportFileSuffixTag>
+  targetLinkerImportFileSuffixNode;
 
 static const struct ShellPathNode : public cmGeneratorExpressionNode
 {
@@ -3248,7 +4396,7 @@ static const struct ShellPathNode : public cmGeneratorExpressionNode
     const GeneratorExpressionContent* content,
     cmGeneratorExpressionDAGChecker* /*dagChecker*/) const override
   {
-    std::vector<std::string> listIn = cmExpandedList(parameters.front());
+    cmList listIn{ parameters.front() };
     if (listIn.empty()) {
       reportError(context, content->GetOriginalExpression(),
                   "\"\" is not an absolute path.");
@@ -3304,23 +4452,52 @@ const cmGeneratorExpressionNode* cmGeneratorExpressionNode::GetNode(
     { "CONFIGURATION", &configurationNode },
     { "CONFIG", &configurationTestNode },
     { "TARGET_FILE", &targetNodeGroup.File },
+    { "TARGET_IMPORT_FILE", &targetImportNodeGroup.File },
     { "TARGET_LINKER_FILE", &targetLinkerNodeGroup.File },
+    { "TARGET_LINKER_LIBRARY_FILE", &targetLinkerLibraryNodeGroup.File },
+    { "TARGET_LINKER_IMPORT_FILE", &targetLinkerImportNodeGroup.File },
     { "TARGET_SONAME_FILE", &targetSoNameNodeGroup.File },
+    { "TARGET_SONAME_IMPORT_FILE", &targetSoNameImportNodeGroup.File },
     { "TARGET_PDB_FILE", &targetPdbNodeGroup.File },
     { "TARGET_FILE_BASE_NAME", &targetFileBaseNameNode },
+    { "TARGET_IMPORT_FILE_BASE_NAME", &targetImportFileBaseNameNode },
     { "TARGET_LINKER_FILE_BASE_NAME", &targetLinkerFileBaseNameNode },
+    { "TARGET_LINKER_LIBRARY_FILE_BASE_NAME",
+      &targetLinkerLibraryFileBaseNameNode },
+    { "TARGET_LINKER_IMPORT_FILE_BASE_NAME",
+      &targetLinkerImportFileBaseNameNode },
     { "TARGET_PDB_FILE_BASE_NAME", &targetPdbFileBaseNameNode },
     { "TARGET_FILE_PREFIX", &targetFilePrefixNode },
+    { "TARGET_IMPORT_FILE_PREFIX", &targetImportFilePrefixNode },
     { "TARGET_LINKER_FILE_PREFIX", &targetLinkerFilePrefixNode },
+    { "TARGET_LINKER_LIBRARY_FILE_PREFIX",
+      &targetLinkerLibraryFilePrefixNode },
+    { "TARGET_LINKER_IMPORT_FILE_PREFIX", &targetLinkerImportFilePrefixNode },
     { "TARGET_FILE_SUFFIX", &targetFileSuffixNode },
+    { "TARGET_IMPORT_FILE_SUFFIX", &targetImportFileSuffixNode },
     { "TARGET_LINKER_FILE_SUFFIX", &targetLinkerFileSuffixNode },
+    { "TARGET_LINKER_LIBRARY_FILE_SUFFIX",
+      &targetLinkerLibraryFileSuffixNode },
+    { "TARGET_LINKER_IMPORT_FILE_SUFFIX", &targetLinkerImportFileSuffixNode },
     { "TARGET_FILE_NAME", &targetNodeGroup.FileName },
+    { "TARGET_IMPORT_FILE_NAME", &targetImportNodeGroup.FileName },
     { "TARGET_LINKER_FILE_NAME", &targetLinkerNodeGroup.FileName },
+    { "TARGET_LINKER_LIBRARY_FILE_NAME",
+      &targetLinkerLibraryNodeGroup.FileName },
+    { "TARGET_LINKER_IMPORT_FILE_NAME",
+      &targetLinkerImportNodeGroup.FileName },
     { "TARGET_SONAME_FILE_NAME", &targetSoNameNodeGroup.FileName },
+    { "TARGET_SONAME_IMPORT_FILE_NAME",
+      &targetSoNameImportNodeGroup.FileName },
     { "TARGET_PDB_FILE_NAME", &targetPdbNodeGroup.FileName },
     { "TARGET_FILE_DIR", &targetNodeGroup.FileDir },
+    { "TARGET_IMPORT_FILE_DIR", &targetImportNodeGroup.FileDir },
     { "TARGET_LINKER_FILE_DIR", &targetLinkerNodeGroup.FileDir },
+    { "TARGET_LINKER_LIBRARY_FILE_DIR",
+      &targetLinkerLibraryNodeGroup.FileDir },
+    { "TARGET_LINKER_IMPORT_FILE_DIR", &targetLinkerImportNodeGroup.FileDir },
     { "TARGET_SONAME_FILE_DIR", &targetSoNameNodeGroup.FileDir },
+    { "TARGET_SONAME_IMPORT_FILE_DIR", &targetSoNameImportNodeGroup.FileDir },
     { "TARGET_PDB_FILE_DIR", &targetPdbNodeGroup.FileDir },
     { "TARGET_BUNDLE_DIR", &targetBundleDirNode },
     { "TARGET_BUNDLE_DIR_NAME", &targetBundleDirNameNode },
@@ -3330,6 +4507,7 @@ const cmGeneratorExpressionNode* cmGeneratorExpressionNode::GetNode(
     { "IN_LIST", &inListNode },
     { "FILTER", &filterNode },
     { "REMOVE_DUPLICATES", &removeDuplicatesNode },
+    { "LIST", &listNode },
     { "LOWER_CASE", &lowerCaseNode },
     { "UPPER_CASE", &upperCaseNode },
     { "PATH", &pathNode },
@@ -3340,6 +4518,7 @@ const cmGeneratorExpressionNode* cmGeneratorExpressionNode::GetNode(
     { "ANGLE-R", &angle_rNode },
     { "COMMA", &commaNode },
     { "SEMICOLON", &semicolonNode },
+    { "QUOTE", &quoteNode },
     { "TARGET_PROPERTY", &targetPropertyNode },
     { "TARGET_NAME", &targetNameNode },
     { "TARGET_OBJECTS", &targetObjectsNode },
@@ -3348,12 +4527,14 @@ const cmGeneratorExpressionNode* cmGeneratorExpressionNode::GetNode(
     { "TARGET_NAME_IF_EXISTS", &targetNameIfExistsNode },
     { "TARGET_GENEX_EVAL", &targetGenexEvalNode },
     { "TARGET_RUNTIME_DLLS", &targetRuntimeDllsNode },
+    { "TARGET_RUNTIME_DLL_DIRS", &targetRuntimeDllDirsNode },
     { "GENEX_EVAL", &genexEvalNode },
     { "BUILD_INTERFACE", &buildInterfaceNode },
     { "INSTALL_INTERFACE", &installInterfaceNode },
     { "BUILD_LOCAL_INTERFACE", &buildLocalInterfaceNode },
     { "INSTALL_PREFIX", &installPrefixNode },
     { "JOIN", &joinNode },
+    { "COMPILE_ONLY", &compileOnlyNode },
     { "LINK_ONLY", &linkOnlyNode },
     { "COMPILE_LANG_AND_ID", &languageAndIdNode },
     { "COMPILE_LANGUAGE", &languageNode },

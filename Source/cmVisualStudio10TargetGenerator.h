@@ -72,6 +72,8 @@ private:
   void WriteCEDebugProjectConfigurationValues(Elem& e0);
   void WriteMSToolConfigurationValuesManaged(Elem& e1,
                                              std::string const& config);
+  void WriteMSToolConfigurationValuesCommon(Elem& e1,
+                                            std::string const& config);
   void WriteHeaderSource(Elem& e1, cmSourceFile const* sf,
                          ConfigToSettings const& toolSettings);
   void WriteExtraSource(Elem& e1, cmSourceFile const* sf,
@@ -97,6 +99,7 @@ private:
   void WriteWinRTPackageCertificateKeyFile(Elem& e0);
   void WriteXamlFilesGroup(Elem& e0);
   void WritePathAndIncrementalLinkOptions(Elem& e0);
+  void WritePublicProjectContentOptions(Elem& e0);
   void WriteItemDefinitionGroups(Elem& e0);
   void VerifyNecessaryFiles();
   void WriteMissingFiles(Elem& e1);
@@ -117,6 +120,7 @@ private:
 
   std::vector<std::string> GetIncludes(std::string const& config,
                                        std::string const& lang) const;
+  std::string GetTargetOutputName() const;
 
   bool ComputeClOptions();
   bool ComputeClOptions(std::string const& configName);
@@ -236,6 +240,7 @@ private:
   bool NsightTegra;
   bool Android;
   bool HaveCustomCommandDepfile = false;
+  std::map<std::string, bool> ScanSourceForModuleDependencies;
   unsigned int NsightTegraVersion[4];
   bool TargetCompileAsWinRT;
   std::set<std::string> IPOEnabledConfigurations;

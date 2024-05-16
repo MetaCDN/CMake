@@ -11,7 +11,7 @@ Synopsis
 .. parsed-literal::
 
  `Run Tests`_
-  ctest [<options>]
+  ctest [<options>] [--test-dir <path-to-build>]
 
  `Build and Test Mode`_
   ctest --build-and-test <path-to-source> <path-to-build>
@@ -118,17 +118,27 @@ Run Tests
  previously interrupted.  If no interruption occurred, the ``-F`` option
  will have no effect.
 
-.. option:: -j <jobs>, --parallel <jobs>
+.. option:: -j [<level>], --parallel [<level>]
 
- Run the tests in parallel using the given number of jobs.
+ Run tests in parallel, optionally limited to a given level of parallelism.
 
- This option tells CTest to run the tests in parallel using given
- number of jobs. This option can also be set by setting the
- :envvar:`CTEST_PARALLEL_LEVEL` environment variable.
+ .. versionadded:: 3.29
+
+    The ``<level>`` may be omitted, or ``0``, in which case:
+
+    * Under `Job Server Integration`_, parallelism is limited by
+      available job tokens.
+
+    * Otherwise, if the value is omitted, parallelism is limited
+      by the number of processors, or 2, whichever is larger.
+
+    * Otherwise, if the value is ``0``, parallelism is unbounded.
+
+ This option may instead be specified by the :envvar:`CTEST_PARALLEL_LEVEL`
+ environment variable.
 
  This option can be used with the :prop_test:`PROCESSORS` test property.
-
- See `Label and Subproject Summary`_.
+ See the `Label and Subproject Summary`_.
 
 .. option:: --resource-spec-file <file>
 
@@ -233,6 +243,30 @@ Run Tests
  a test will only be excluded if each regular expression matches at least one
  of the test's labels (i.e. the multiple ``-LE`` labels form an ``AND``
  relationship).  See `Label Matching`_.
+
+.. option:: --tests-from-file <filename>
+
+ .. versionadded:: 3.29
+
+ Run tests listed in the given file.
+
+ This option tells CTest to run tests that are listed in the given file.
+ The file must contain one exact test name per line.
+ Lines that do not exactly match any test names are ignored.
+ This option can be combined with the other options like
+ ``-R``, ``-E``, ``-L`` or ``-LE``.
+
+.. option:: --exclude-from-file <filename>
+
+ .. versionadded:: 3.29
+
+ Exclude tests listed in the given file.
+
+ This option tells CTest to NOT run tests that are listed in the given file.
+ The file must contain one exact test name per line.
+ Lines that do not exactly match any test names are ignored.
+ This option can be combined with the other options like
+ ``-R``, ``-E``, ``-L`` or ``-LE``.
 
 .. option:: -FA <regex>, --fixture-exclude-any <regex>
 
@@ -354,7 +388,10 @@ Run Tests
 
 .. option:: --test-dir <dir>
 
- Specify the directory in which to look for tests.
+ .. versionadded:: 3.20
+
+ Specify the directory in which to look for tests, typically a CMake project
+ build directory. If not specified, the current directory is used.
 
 .. option:: --test-output-size-passed <size>
 
@@ -651,6 +688,8 @@ a `CDash`_ server. The command-line signature used to submit to `CDash`_ is::
   ctest -S <script>            [-- <dashboard-options>...]
   ctest -SP <script>           [-- <dashboard-options>...]
 
+.. _`CDash`: https://www.cdash.org
+
 Options for Dashboard Client include:
 
 .. option:: -D <dashboard>, --dashboard <dashboard>
@@ -748,6 +787,16 @@ The available ``<dashboard-options>`` are the following:
  Submit extra files to the dashboard.
 
  This option will submit extra files to the dashboard.
+
+.. option:: --http-header <header>
+
+ .. versionadded:: 3.29
+
+ Append HTTP header when submitting to the dashboard.
+
+ This option will cause CTest to append the specified header
+ when submitting to the dashboard.
+ This option may be specified more than once.
 
 .. option:: --http1.0
 
@@ -1229,7 +1278,8 @@ Configuration settings include:
 
 ``TimeOut``
   The default timeout for each test if not specified by the
-  :prop_test:`TIMEOUT` test property.
+  :prop_test:`TIMEOUT` test property or the
+  :option:`--timeout <ctest --timeout>` flag.
 
   * `CTest Script`_ variable: :variable:`CTEST_TEST_TIMEOUT`
   * :module:`CTest` module variable: ``DART_TESTING_TIMEOUT``
@@ -1402,13 +1452,24 @@ Configuration settings include:
   * :module:`CTest` module variable: ``CTEST_SUBMIT_RETRY_DELAY``
 
 ``CurlOptions``
+  .. deprecated:: 3.30
+
+    Use ``TLSVerify`` instead.
+
   Specify a semicolon-separated list of options to control the
   Curl library that CTest uses internally to connect to the
-  server.  Possible options are ``CURLOPT_SSL_VERIFYPEER_OFF``
-  and ``CURLOPT_SSL_VERIFYHOST_OFF``.
+  server.
 
   * `CTest Script`_ variable: :variable:`CTEST_CURL_OPTIONS`
   * :module:`CTest` module variable: ``CTEST_CURL_OPTIONS``
+
+  Possible options are:
+
+  ``CURLOPT_SSL_VERIFYPEER_OFF``
+    Disable the ``CURLOPT_SSL_VERIFYPEER`` curl option.
+
+  ``CURLOPT_SSL_VERIFYHOST_OFF``
+    Disable the ``CURLOPT_SSL_VERIFYHOST`` curl option.
 
 ``DropLocation``
   Legacy option.  When ``SubmitURL`` is not set, it is constructed from
@@ -1489,6 +1550,24 @@ Configuration settings include:
 
   * `CTest Script`_ variable: :variable:`CTEST_SUBMIT_INACTIVITY_TIMEOUT`
   * :module:`CTest` module variable: ``CTEST_SUBMIT_INACTIVITY_TIMEOUT``
+
+``TLSVersion``
+  .. versionadded:: 3.30
+
+  Specify a minimum TLS version allowed when submitting to a dashboard
+  via ``https://`` URLs.
+
+  * `CTest Script`_ variable: :variable:`CTEST_TLS_VERSION`
+  * :module:`CTest` module variable: ``CTEST_TLS_VERSION``
+
+``TLSVerify``
+  .. versionadded:: 3.30
+
+  Specify a boolean value indicating whether to verify the server
+  certificate when submitting to a dashboard via ``https://`` URLs.
+
+  * `CTest Script`_ variable: :variable:`CTEST_TLS_VERIFY`
+  * :module:`CTest` module variable: ``CTEST_TLS_VERIFY``
 
 ``TriggerSite``
   Legacy option.  Not used.
@@ -1588,17 +1667,20 @@ that running several of these tests at once does not exhaust the GPU's memory
 pool.
 
 Please note that CTest has no concept of what a GPU is or how much memory it
-has, nor does it have any way of communicating with a GPU to retrieve this
-information or perform any memory management. CTest simply keeps track of a
-list of abstract resource types, each of which has a certain number of slots
-available for tests to use. Each test specifies the number of slots that it
-requires from a certain resource, and CTest then schedules them in a way that
-prevents the total number of slots in use from exceeding the listed capacity.
-When a test is executed, and slots from a resource are allocated to that test,
-tests may assume that they have exclusive use of those slots for the duration
-of the test's process.
+has. It does not have any way of communicating with a GPU to retrieve this
+information or perform any memory management, although the project can define
+a test that provides details about the test machine (see
+:ref:`ctest-resource-dynamically-generated-spec-file`).
 
-The CTest resource allocation feature consists of two inputs:
+CTest keeps track of a list of abstract resource types, each of which has a
+certain number of slots available for tests to use. Each test specifies the
+number of slots that it requires from a certain resource, and CTest then
+schedules them in a way that prevents the total number of slots in use from
+exceeding the listed capacity. When a test is executed, and slots from a
+resource are allocated to that test, tests may assume that they have exclusive
+use of those slots for the duration of the test's process.
+
+The CTest resource allocation feature consists of at least two inputs:
 
 * The :ref:`resource specification file <ctest-resource-specification-file>`,
   described below, which describes the resources available on the system.
@@ -1639,15 +1721,20 @@ properties to indicate a skipped test.
 Resource Specification File
 ---------------------------
 
-The resource specification file is a JSON file which is passed to CTest, either
-on the command line as :option:`ctest --resource-spec-file`, or as the
-``RESOURCE_SPEC_FILE`` argument of :command:`ctest_test`. If a dashboard script
-is used and ``RESOURCE_SPEC_FILE`` is not specified, the value of
-:variable:`CTEST_RESOURCE_SPEC_FILE` in the dashboard script is used instead.
-If :option:`--resource-spec-file <ctest --resource-spec-file>`, ``RESOURCE_SPEC_FILE``,
-and :variable:`CTEST_RESOURCE_SPEC_FILE` in the dashboard script are not specified,
-the value of :variable:`CTEST_RESOURCE_SPEC_FILE` in the CMake build is used
-instead. If none of these are specified, no resource spec file is used.
+The resource specification file is a JSON file which is passed to CTest in one
+of a number of ways. It can be specified on the command line with the
+:option:`ctest --resource-spec-file` option, it can be given using the
+``RESOURCE_SPEC_FILE`` argument of :command:`ctest_test`, or it can be
+generated dynamically as part of test execution (see
+:ref:`ctest-resource-dynamically-generated-spec-file`).
+
+If a dashboard script is used and ``RESOURCE_SPEC_FILE`` is not specified, the
+value of :variable:`CTEST_RESOURCE_SPEC_FILE` in the dashboard script is used
+instead.  If :option:`--resource-spec-file <ctest --resource-spec-file>`,
+``RESOURCE_SPEC_FILE``, and :variable:`CTEST_RESOURCE_SPEC_FILE` in the
+dashboard script are not specified, the value of
+:variable:`CTEST_RESOURCE_SPEC_FILE` in the CMake build is used instead.
+If none of these are specified, no resource spec file is used.
 
 The resource specification file must be a JSON object. All examples in this
 document assume the following resource specification file:
@@ -1816,9 +1903,51 @@ The following variables are passed to the test process:
   uppercase in the ``CTEST_RESOURCE_GROUP_<num>_<resource-type>`` environment
   variable.
 
+.. _`ctest-resource-dynamically-generated-spec-file`:
+
+Dynamically-Generated Resource Specification File
+-------------------------------------------------
+
+.. versionadded:: 3.28
+
+A project may optionally specify a single test which will be used to
+dynamically generate the resource specification file that CTest will use for
+scheduling tests that use resources. The test that generates the file must
+have the :prop_test:`GENERATED_RESOURCE_SPEC_FILE` property set, and must have
+exactly one fixture in its :prop_test:`FIXTURES_SETUP` property. This fixture
+is considered by CTest to have special meaning: it's the fixture that generates
+the resource spec file. The fixture may have any name. If such a fixture
+exists, all tests that have :prop_test:`RESOURCE_GROUPS` set must have the
+fixture in their :prop_test:`FIXTURES_REQUIRED`, and a resource spec file may
+not be specified with the ``--resource-spec-file`` argument or the
+:variable:`CTEST_RESOURCE_SPEC_FILE` variable.
+
+.. _`ctest-job-server-integration`:
+
+Job Server Integration
+======================
+
+.. versionadded:: 3.29
+
+On POSIX systems, when running under the context of a `Job Server`_,
+CTest shares its job slots.  This is independent of the :prop_test:`PROCESSORS`
+test property, which still counts against CTest's :option:`-j <ctest -j>`
+parallel level.  CTest acquires exactly one token from the job server before
+running each test, and returns it when the test finishes.
+
+For example, consider the ``Makefile``:
+
+.. literalinclude:: CTEST_EXAMPLE_MAKEFILE_JOB_SERVER.make
+  :language: make
+
+When invoked via ``make -j 2 test``, ``ctest`` connects to the job server,
+acquires a token for each test, and runs at most 2 tests concurrently.
+
+On Windows systems, job server integration is not yet implemented.
+
+.. _`Job Server`: https://www.gnu.org/software/make/manual/html_node/Job-Slots.html
+
 See Also
 ========
 
 .. include:: LINKS.txt
-
-_`CDash`: https://cdash.org

@@ -77,9 +77,25 @@ This module defines the following :ref:`Imported Targets <Imported Targets>`:
   :prop_gbl:`CMAKE_ROLE` is ``PROJECT``.
 
 ``Python::Interpreter``
-  Python interpreter. Target defined if component ``Interpreter`` is found.
+  Python interpreter. This target is defined only if the ``Interpreter``
+  component is found.
+``Python::InterpreterDebug``
+  .. versionadded:: 3.30
+
+  Python debug interpreter. This target is defined only if the ``Interpreter``
+  component is found and the ``Python_EXECUTABLE_DEBUG`` variable is defined.
+  The target is only defined on the ``Windows`` platform.
+
+``Python::InterpreterMultiConfig``
+  .. versionadded:: 3.30
+
+  Python interpreter. The release or debug version of the interpreter will be
+  used, based on the context (platform, configuration).
+  This target is defined only if the ``Interpreter`` component is found
+
 ``Python::Compiler``
-  Python compiler. Target defined if component ``Compiler`` is found.
+  Python compiler. This target is defined only if the ``Compiler`` component is
+  found.
 
 ``Python::Module``
   .. versionadded:: 3.15
@@ -114,6 +130,20 @@ This module will set the following variables in your project
   System has the Python interpreter.
 ``Python_EXECUTABLE``
   Path to the Python interpreter.
+``Python_EXECUTABLE_DEBUG``
+  .. versionadded:: 3.30
+
+  Path to the debug Python interpreter. It is only defined on the ``Windows``
+  platform.
+
+``Python_INTERPRETER``
+  .. versionadded:: 3.30
+
+  Path to the Python interpreter, defined as a
+  :manual:`generator expression <cmake-generator-expressions(7)>` selecting
+  the ``Python_EXECUTABLE`` or ``Python_EXECUTABLE_DEBUG`` variable based on
+  the context (platform, configuration).
+
 ``Python_INTERPRETER_ID``
   A short string unique to the interpreter. Possible values include:
     * Python
@@ -125,38 +155,28 @@ This module will set the following variables in your project
 ``Python_STDLIB``
   Standard platform independent installation directory.
 
-  Information returned by
-  ``distutils.sysconfig.get_python_lib(plat_specific=False,standard_lib=True)``
-  or else ``sysconfig.get_path('stdlib')``.
+  Information returned by ``sysconfig.get_path('stdlib')``.
 ``Python_STDARCH``
   Standard platform dependent installation directory.
 
-  Information returned by
-  ``distutils.sysconfig.get_python_lib(plat_specific=True,standard_lib=True)``
-  or else ``sysconfig.get_path('platstdlib')``.
+  Information returned by ``sysconfig.get_path('platstdlib')``.
 ``Python_SITELIB``
   Third-party platform independent installation directory.
 
-  Information returned by
-  ``distutils.sysconfig.get_python_lib(plat_specific=False,standard_lib=False)``
-  or else ``sysconfig.get_path('purelib')``.
+  Information returned by ``sysconfig.get_path('purelib')``.
 ``Python_SITEARCH``
   Third-party platform dependent installation directory.
 
-  Information returned by
-  ``distutils.sysconfig.get_python_lib(plat_specific=True,standard_lib=False)``
-  or else ``sysconfig.get_path('platlib')``.
+  Information returned by ``sysconfig.get_path('platlib')``.
 
 ``Python_SOABI``
   .. versionadded:: 3.17
 
   Extension suffix for modules.
 
-  Information computed from ``distutils.sysconfig.get_config_var('EXT_SUFFIX')``
-  or ``distutils.sysconfig.get_config_var('SOABI')`` or
-  ``python3-config --extension-suffix``. If package ``distutils.sysconfig`` is
-  not available, ``sysconfig.get_config_var('EXT_SUFFIX')`` or
-  ``sysconfig.get_config_var('SOABI')`` are used.
+  Information computed from ``sysconfig.get_config_var('EXT_SUFFIX')`` or
+  ``sysconfig.get_config_var('SOABI')`` or
+  ``python3-config --extension-suffix``.
 
 ``Python_SOSABI``
   .. versionadded:: 3.26
@@ -203,6 +223,12 @@ This module will set the following variables in your project
 ``Python_INCLUDE_DIRS``
 
   The Python include directories.
+
+``Python_DEBUG_POSTFIX``
+  .. versionadded.. 3.30
+
+  Postfix of debug python module. This variable can be used to define the
+  :prop_tgt:`DEBUG_POSTFIX` target property.
 
 ``Python_LINK_OPTIONS``
   .. versionadded:: 3.19
@@ -335,6 +361,8 @@ Hints
     constraints is founded.
     This is the default if policy :policy:`CMP0094` is set to ``NEW``.
 
+  See also ``Python_FIND_UNVERSIONED_NAMES``.
+
 ``Python_FIND_REGISTRY``
   .. versionadded:: 3.13
 
@@ -442,6 +470,8 @@ Hints
     This is the default.
   * ``NEVER``: The generic name are not searched at all.
 
+  See also ``Python_FIND_STRATEGY``.
+
 Artifacts Specification
 ^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -542,7 +572,11 @@ If the library type is not specified, ``MODULE`` is assumed.
   was introduced. Specifying only major version ``3`` is equivalent to ``3.2``.
 
   When option ``WITH_SOABI`` is also specified,  the module suffix will include
-  the ``Python3_SOSABI`` value, if any.
+  the ``Python_SOSABI`` value, if any.
+
+.. versionadded:: 3.30
+  For ``MODULE`` type, the :prop_tgt:`DEBUG_POSTFIX` target property is
+  initialized with the value of ``Python_DEBUG_POSTFIX`` variable if defined.
 #]=======================================================================]
 
 

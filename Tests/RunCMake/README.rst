@@ -32,6 +32,16 @@ but do not actually build anything.  To add a test:
    and create ``test.cmake.in``, ``CTestConfig.cmake.in``, and
    ``CMakeLists.txt.in`` files to be configured for each case.
 
+   Alternatively, if the test is to cover running ``cpack -G`` then use::
+
+    include(RunCPack)
+    run_cpack(Sample1)
+    ...
+    run_cpack(SampleN)
+
+   where ``Sample1`` through ``SampleN`` are sample project directories
+   in the ``RunCPack/`` directory adjacent to this file.
+
 4. Create file ``<Test>/CMakeLists.txt`` in the directory containing::
 
     cmake_minimum_required(...)
@@ -71,6 +81,8 @@ but do not actually build anything.  To add a test:
     Top of test binary tree
 
    and an failure must store a message in ``RunCMake_TEST_FAILED``.
+   The check script may optionally set ``RunCMake_TEST_FAILURE_MESSAGE``
+   with additional text to be included in the message if the test fails.
 
 To speed up local testing, you can choose to run only a subset of
 ``run_cmake()`` tests in a ``RunCMakeTest.cmake`` script by using the
@@ -82,3 +94,10 @@ match the regular expression are not run. For example::
 
 This will only run subtests in ``RunCMake.Example`` that start with
 ``example``.
+
+To speed up the process of creating a new ``RunCMake`` test, you can run a
+script that will automatically perform steps 1 through 4 for you::
+
+  cmake -DRunCMake_TEST_SUITE=<test suite name> -P Tests/RunCMake/AddRunCMakeTestSuite.cmake
+
+Be sure to run this from the top-level CMake source directory.

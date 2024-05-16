@@ -28,6 +28,8 @@
 #include "cmDocumentation.h"
 #include "cmDocumentationEntry.h"
 #include "cmGlobalGenerator.h"
+#include "cmJSONState.h"
+#include "cmList.h"
 #include "cmMakefile.h"
 #include "cmState.h"
 #include "cmStateSnapshot.h"
@@ -265,11 +267,11 @@ int main(int argc, char const* const* argv)
 
     cmCMakePresetsGraph presetsGraph;
     auto result = presetsGraph.ReadProjectPresets(workingDirectory);
-    if (result != cmCMakePresetsGraph::ReadFileResult::READ_OK) {
+    if (result != true) {
       cmCPack_Log(&log, cmCPackLog::LOG_ERROR,
                   "Could not read presets from "
-                    << workingDirectory << ": "
-                    << cmCMakePresetsGraph::ResultToString(result) << '\n');
+                    << workingDirectory << ":"
+                    << presetsGraph.parseState.GetErrorMessage() << '\n');
       return 1;
     }
 
@@ -361,11 +363,11 @@ int main(int argc, char const* const* argv)
     }
 
     if (!expandedPreset->Generators.empty() && generator.empty()) {
-      generator = cmJoin(expandedPreset->Generators, ";");
+      generator = cmList::to_string(expandedPreset->Generators);
     }
 
     if (!expandedPreset->Configurations.empty() && cpackBuildConfig.empty()) {
-      cpackBuildConfig = cmJoin(expandedPreset->Configurations, ";");
+      cpackBuildConfig = cmList::to_string(expandedPreset->Configurations);
     }
 
     definitions.insert(expandedPreset->Variables.begin(),
@@ -402,7 +404,9 @@ int main(int argc, char const* const* argv)
               "Read CPack config file: " << cpackConfigFile << '\n');
 
   bool cpackConfigFileSpecified = true;
-  if (cpackConfigFile.empty()) {
+  if (!cpackConfigFile.empty()) {
+    cpackConfigFile = cmSystemTools::CollapseFullPath(cpackConfigFile);
+  } else {
     cpackConfigFile = cmStrCat(cmSystemTools::GetCurrentWorkingDirectory(),
                                "/CPackConfig.cmake");
     cpackConfigFileSpecified = false;
@@ -444,7 +448,6 @@ int main(int argc, char const* const* argv)
     }
 
     if (cmSystemTools::FileExists(cpackConfigFile)) {
-      cpackConfigFile = cmSystemTools::CollapseFullPath(cpackConfigFile);
       cmCPack_Log(&log, cmCPackLog::LOG_VERBOSE,
                   "Read CPack configuration file: " << cpackConfigFile
                                                     << '\n');
@@ -473,31 +476,25 @@ int main(int argc, char const* const* argv)
     if (!cpackProjectVendor.empty()) {
       globalMF.AddDefinition("CPACK_PACKAGE_VENDOR", cpackProjectVendor);
     }
-    // if this is not empty it has been set on the command line
-    // go for it. Command line override values set in config file.
     if (!cpackProjectDirectory.empty()) {
-      globalMF.AddDefinition("CPACK_PACKAGE_DIRECTORY", cpackProjectDirectory);
-    }
-    // The value has not been set on the command line
-    else {
-      // get a default value (current working directory)
-      cpackProjectDirectory = cmSystemTools::GetCurrentWorkingDirectory();
-      // use default value if no value has been provided by the config file
-      if (!globalMF.IsSet("CPACK_PACKAGE_DIRECTORY")) {
-        globalMF.AddDefinition("CPACK_PACKAGE_DIRECTORY",
-                               cpackProjectDirectory);
+      // The value has been set on the command line.  Ensure it is absolute.
+      cpackProjectDirectory =
+        cmSystemTools::CollapseFullPath(cpackProjectDirectory);
+    } else {
+      // The value has not been set on the command line.  Check config file.
+      if (cmValue pd = globalMF.GetDefinition("CPACK_PACKAGE_DIRECTORY")) {
+        // The value has been set in the config file.  Ensure it is absolute.
+        cpackProjectDirectory = cmSystemTools::CollapseFullPath(*pd);
+      } else {
+        // Default to the current working directory.
+        cpackProjectDirectory = cmSystemTools::GetCurrentWorkingDirectory();
       }
     }
+    globalMF.AddDefinition("CPACK_PACKAGE_DIRECTORY", cpackProjectDirectory);
+
     for (auto const& cd : definitions) {
       globalMF.AddDefinition(cd.first, cd.second);
     }
-
-    // Force CPACK_PACKAGE_DIRECTORY as absolute path
-    cpackProjectDirectory =
-      globalMF.GetSafeDefinition("CPACK_PACKAGE_DIRECTORY");
-    cpackProjectDirectory =
-      cmSystemTools::CollapseFullPath(cpackProjectDirectory);
-    globalMF.AddDefinition("CPACK_PACKAGE_DIRECTORY", cpackProjectDirectory);
 
     cmValue cpackModulesPath = globalMF.GetDefinition("CPACK_MODULE_PATH");
     if (cpackModulesPath) {
@@ -508,8 +505,8 @@ int main(int argc, char const* const* argv)
       cmCPack_Log(&log, cmCPackLog::LOG_ERROR,
                   "CPack generator not specified\n");
     } else {
-      std::vector<std::string> generatorsVector = cmExpandedList(*genList);
-      for (std::string const& gen : generatorsVector) {
+      cmList generatorsList{ *genList };
+      for (std::string const& gen : generatorsList) {
         cmMakefile::ScopePushPop raii(&globalMF);
         cmMakefile* mf = &globalMF;
         cmCPack_Log(&log, cmCPackLog::LOG_VERBOSE,

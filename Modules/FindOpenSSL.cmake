@@ -107,13 +107,16 @@ The following variables may be set to control search behavior:
 
 ``ENV{PKG_CONFIG_PATH}``
   On UNIX-like systems, ``pkg-config`` is used to locate the system OpenSSL.
-  Set the ``PKG_CONFIG_PATH`` environment varialbe to look in alternate
+  Set the ``PKG_CONFIG_PATH`` environment variable to look in alternate
   locations.  Useful on multi-lib systems.
 #]=======================================================================]
 
+cmake_policy(PUSH)
+cmake_policy(SET CMP0159 NEW) # file(STRINGS) with REGEX updates CMAKE_MATCH_<n>
+
 macro(_OpenSSL_test_and_find_dependencies ssl_library crypto_library)
   unset(_OpenSSL_extra_static_deps)
-  if((CMAKE_SYSTEM_NAME STREQUAL "Linux") AND
+  if(UNIX AND
      (("${ssl_library}" MATCHES "\\${CMAKE_STATIC_LIBRARY_SUFFIX}$") OR
       ("${crypto_library}" MATCHES "\\${CMAKE_STATIC_LIBRARY_SUFFIX}$")))
     set(_OpenSSL_has_dependencies TRUE)
@@ -140,7 +143,7 @@ macro(_OpenSSL_test_and_find_dependencies ssl_library crypto_library)
         endif()
       endforeach()
       unset(_OPENSSL_DEP_LIB)
-    else()
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       set(_OpenSSL_has_dependency_dl TRUE)
     endif()
     if(_OpenSSL_ldflags_other)
@@ -152,7 +155,7 @@ macro(_OpenSSL_test_and_find_dependencies ssl_library crypto_library)
         endif()
       endforeach()
       unset(_OPENSSL_DEP_LDFLAG)
-    else()
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       set(_OpenSSL_has_dependency_threads TRUE)
       find_package(Threads)
     endif()
@@ -210,7 +213,7 @@ endif ()
 # Support preference of static libs by adjusting CMAKE_FIND_LIBRARY_SUFFIXES
 if(OPENSSL_USE_STATIC_LIBS)
   set(_openssl_ORIG_CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES})
-  if(WIN32)
+  if(MSVC)
     set(CMAKE_FIND_LIBRARY_SUFFIXES .lib .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
   else()
     set(CMAKE_FIND_LIBRARY_SUFFIXES .a )
@@ -230,13 +233,15 @@ else()
   set(_OPENSSL_FIND_PATH_SUFFIX "include")
 endif()
 
-if (WIN32)
+if (OPENSSL_ROOT_DIR OR NOT "$ENV{OPENSSL_ROOT_DIR}" STREQUAL "")
+  set(_OPENSSL_ROOT_HINTS HINTS ${OPENSSL_ROOT_DIR} ENV OPENSSL_ROOT_DIR)
+  set(_OPENSSL_ROOT_PATHS NO_DEFAULT_PATH)
+elseif (MSVC)
   # http://www.slproweb.com/products/Win32OpenSSL.html
   set(_OPENSSL_ROOT_HINTS
-    ${OPENSSL_ROOT_DIR}
+    HINTS
     "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenSSL (32-bit)_is1;Inno Setup: App Path]"
     "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenSSL (64-bit)_is1;Inno Setup: App Path]"
-    ENV OPENSSL_ROOT_DIR
     )
 
   if("${CMAKE_SIZEOF_VOID_P}" STREQUAL "8")
@@ -255,6 +260,7 @@ if (WIN32)
   endif()
 
   set(_OPENSSL_ROOT_PATHS
+    PATHS
     "${_programfiles}/OpenSSL"
     "${_programfiles}/OpenSSL-${_arch}"
     "C:/OpenSSL/"
@@ -262,16 +268,11 @@ if (WIN32)
     )
   unset(_programfiles)
   unset(_arch)
-else ()
-  set(_OPENSSL_ROOT_HINTS
-    ${OPENSSL_ROOT_DIR}
-    ENV OPENSSL_ROOT_DIR
-    )
 endif ()
 
 set(_OPENSSL_ROOT_HINTS_AND_PATHS
-    HINTS ${_OPENSSL_ROOT_HINTS}
-    PATHS ${_OPENSSL_ROOT_PATHS}
+    ${_OPENSSL_ROOT_HINTS}
+    ${_OPENSSL_ROOT_PATHS}
     )
 
 find_path(OPENSSL_INCLUDE_DIR
@@ -312,15 +313,24 @@ if(WIN32 AND NOT CYGWIN)
     # Since OpenSSL 1.1, lib names are like libcrypto32MTd.lib and libssl32MTd.lib
     if( "${CMAKE_SIZEOF_VOID_P}" STREQUAL "8" )
         set(_OPENSSL_MSVC_ARCH_SUFFIX "64")
+        set(_OPENSSL_MSVC_FOLDER_SUFFIX "64")
     else()
         set(_OPENSSL_MSVC_ARCH_SUFFIX "32")
+        set(_OPENSSL_MSVC_FOLDER_SUFFIX "86")
     endif()
 
     if(OPENSSL_USE_STATIC_LIBS)
       set(_OPENSSL_STATIC_SUFFIX
         "_static"
       )
-      set(_OPENSSL_PATH_SUFFIXES
+      set(_OPENSSL_PATH_SUFFIXES_DEBUG
+        "lib/VC/x${_OPENSSL_MSVC_FOLDER_SUFFIX}/${_OPENSSL_MSVC_RT_MODE}d"
+        "lib/VC/static"
+        "VC/static"
+        "lib"
+        )
+      set(_OPENSSL_PATH_SUFFIXES_RELEASE
+        "lib/VC/x${_OPENSSL_MSVC_FOLDER_SUFFIX}/${_OPENSSL_MSVC_RT_MODE}"
         "lib/VC/static"
         "VC/static"
         "lib"
@@ -329,7 +339,14 @@ if(WIN32 AND NOT CYGWIN)
       set(_OPENSSL_STATIC_SUFFIX
         ""
       )
-      set(_OPENSSL_PATH_SUFFIXES
+      set(_OPENSSL_PATH_SUFFIXES_DEBUG
+        "lib/VC/x${_OPENSSL_MSVC_FOLDER_SUFFIX}/${_OPENSSL_MSVC_RT_MODE}d"
+        "lib/VC"
+        "VC"
+        "lib"
+        )
+      set(_OPENSSL_PATH_SUFFIXES_RELEASE
+        "lib/VC/x${_OPENSSL_MSVC_FOLDER_SUFFIX}/${_OPENSSL_MSVC_RT_MODE}"
         "lib/VC"
         "VC"
         "lib"
@@ -344,6 +361,7 @@ if(WIN32 AND NOT CYGWIN)
         libcrypto${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_ARCH_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         libcrypto${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         libcrypto${_OPENSSL_STATIC_SUFFIX}d
+        libcrypto${_OPENSSL_STATIC_SUFFIX}
         libeay32${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         libeay32${_OPENSSL_STATIC_SUFFIX}d
         crypto${_OPENSSL_STATIC_SUFFIX}d
@@ -358,7 +376,7 @@ if(WIN32 AND NOT CYGWIN)
       NAMES_PER_DIR
       ${_OPENSSL_ROOT_HINTS_AND_PATHS}
       PATH_SUFFIXES
-        ${_OPENSSL_PATH_SUFFIXES}
+        ${_OPENSSL_PATH_SUFFIXES_DEBUG}
     )
 
     find_library(LIB_EAY_RELEASE
@@ -383,7 +401,7 @@ if(WIN32 AND NOT CYGWIN)
       NAMES_PER_DIR
       ${_OPENSSL_ROOT_HINTS_AND_PATHS}
       PATH_SUFFIXES
-        ${_OPENSSL_PATH_SUFFIXES}
+        ${_OPENSSL_PATH_SUFFIXES_RELEASE}
     )
 
     find_library(SSL_EAY_DEBUG
@@ -394,6 +412,7 @@ if(WIN32 AND NOT CYGWIN)
         libssl${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_ARCH_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         libssl${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         libssl${_OPENSSL_STATIC_SUFFIX}d
+        libssl${_OPENSSL_STATIC_SUFFIX}
         ssleay32${_OPENSSL_STATIC_SUFFIX}${_OPENSSL_MSVC_RT_MODE}d
         ssleay32${_OPENSSL_STATIC_SUFFIX}d
         ssl${_OPENSSL_STATIC_SUFFIX}d
@@ -408,7 +427,7 @@ if(WIN32 AND NOT CYGWIN)
       NAMES_PER_DIR
       ${_OPENSSL_ROOT_HINTS_AND_PATHS}
       PATH_SUFFIXES
-        ${_OPENSSL_PATH_SUFFIXES}
+        ${_OPENSSL_PATH_SUFFIXES_DEBUG}
     )
 
     find_library(SSL_EAY_RELEASE
@@ -433,7 +452,7 @@ if(WIN32 AND NOT CYGWIN)
       NAMES_PER_DIR
       ${_OPENSSL_ROOT_HINTS_AND_PATHS}
       PATH_SUFFIXES
-        ${_OPENSSL_PATH_SUFFIXES}
+        ${_OPENSSL_PATH_SUFFIXES_RELEASE}
     )
 
     set(LIB_EAY_LIBRARY_DEBUG "${LIB_EAY_DEBUG}")
@@ -780,3 +799,5 @@ unset(_OpenSSL_extra_static_deps)
 unset(_OpenSSL_has_dependency_dl)
 unset(_OpenSSL_has_dependency_threads)
 unset(_OpenSSL_has_dependency_zlib)
+
+cmake_policy(POP)

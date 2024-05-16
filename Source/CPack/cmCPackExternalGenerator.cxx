@@ -15,8 +15,8 @@
 
 #include "cmCPackComponentGroup.h"
 #include "cmCPackLog.h"
+#include "cmList.h"
 #include "cmMakefile.h"
-#include "cmStringAlgorithms.h"
 #include "cmSystemTools.h"
 #include "cmValue.h"
 
@@ -79,7 +79,7 @@ int cmCPackExternalGenerator::PackageFiles()
 
     cmValue builtPackages = this->GetOption("CPACK_EXTERNAL_BUILT_PACKAGES");
     if (builtPackages) {
-      cmExpandList(builtPackages, this->packageFileNames, false);
+      cmExpandList(builtPackages, this->packageFileNames);
     }
   }
 
@@ -156,7 +156,7 @@ int cmCPackExternalGenerator::InstallCMakeProject(
 
 bool cmCPackExternalGenerator::StagingEnabled() const
 {
-  return !cmIsOff(this->GetOption("CPACK_EXTERNAL_ENABLE_STAGING"));
+  return !this->GetOption("CPACK_EXTERNAL_ENABLE_STAGING").IsOff();
 }
 
 cmCPackExternalGenerator::cmCPackExternalVersionGenerator::
@@ -221,7 +221,7 @@ int cmCPackExternalGenerator::cmCPackExternalVersionGenerator::WriteToJSON(
     root["setDestdir"] = false;
   }
 
-  root["stripFiles"] = !cmIsOff(this->Parent->GetOption("CPACK_STRIP_FILES"));
+  root["stripFiles"] = !this->Parent->GetOption("CPACK_STRIP_FILES").IsOff();
   root["warnOnAbsoluteInstallDestination"] =
     this->Parent->IsOn("CPACK_WARN_ON_ABSOLUTE_INSTALL_DESTINATION");
   root["errorOnAbsoluteInstallDestination"] =

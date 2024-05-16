@@ -16,8 +16,22 @@ flag to support OpenMP.
 .. versionadded:: 3.5
   Clang support.
 
-Variables
-^^^^^^^^^
+Input Variables
+^^^^^^^^^^^^^^^
+
+The following variables may be set to influence this module's behavior:
+
+``OpenMP_RUNTIME_MSVC``
+  .. versionadded:: 3.30
+
+  Specify the `OpenMP Runtime <msvc-openmp_>`_ when compiling with MSVC.
+  If set to a non-empty value, such as ``experimental`` or ``llvm``, it
+  will be passed as the value of the ``-openmp:`` flag.
+
+.. _`msvc-openmp`: https://learn.microsoft.com/en-us/cpp/build/reference/openmp-enable-openmp-2-0-support
+
+Result Variables
+^^^^^^^^^^^^^^^^
 
 .. versionadded:: 3.10
   The module exposes the components ``C``, ``CXX``, and ``Fortran``.
@@ -96,6 +110,7 @@ cmake_policy(PUSH)
 cmake_policy(SET CMP0012 NEW) # if() recognizes numbers and booleans
 cmake_policy(SET CMP0054 NEW) # if() quoted variables not dereferenced
 cmake_policy(SET CMP0057 NEW) # if IN_LIST
+cmake_policy(SET CMP0159 NEW) # file(STRINGS) with REGEX updates CMAKE_MATCH_<n>
 
 function(_OPENMP_FLAG_CANDIDATES LANG)
   if(NOT OpenMP_${LANG}_FLAG)
@@ -120,7 +135,11 @@ function(_OPENMP_FLAG_CANDIDATES LANG)
     else()
       set(OMP_FLAG_IntelLLVM "-fiopenmp")
     endif()
-    set(OMP_FLAG_MSVC "-openmp")
+    if(OpenMP_RUNTIME_MSVC)
+      set(OMP_FLAG_MSVC "-openmp:${OpenMP_RUNTIME_MSVC}")
+    else()
+      set(OMP_FLAG_MSVC "-openmp")
+    endif()
     set(OMP_FLAG_PathScale "-openmp")
     set(OMP_FLAG_NAG "-openmp")
     set(OMP_FLAG_Absoft "-openmp")
@@ -224,7 +243,8 @@ function(_OPENMP_GET_FLAGS LANG FLAG_MODE OPENMP_FLAG_VAR OPENMP_LIB_NAMES_VAR)
       OUTPUT_VARIABLE OpenMP_TRY_COMPILE_OUTPUT
     )
 
-    if(OpenMP_COMPILE_RESULT_${FLAG_MODE}_${OPENMP_PLAIN_FLAG})
+    if(OpenMP_COMPILE_RESULT_${FLAG_MODE}_${OPENMP_PLAIN_FLAG} AND
+       NOT "${CMAKE_${LANG}_COMPILER_ID};${CMAKE_${LANG}_SIMULATE_ID}" STREQUAL "Clang;MSVC")
       set("${OPENMP_FLAG_VAR}" "${OPENMP_FLAG}" PARENT_SCOPE)
 
       if(CMAKE_${LANG}_VERBOSE_FLAG)
@@ -298,8 +318,9 @@ function(_OPENMP_GET_FLAGS LANG FLAG_MODE OPENMP_FLAG_VAR OPENMP_LIB_NAMES_VAR)
         set("${OPENMP_LIB_NAMES_VAR}" "" PARENT_SCOPE)
       endif()
       break()
-    elseif(CMAKE_${LANG}_COMPILER_ID STREQUAL "AppleClang"
-      AND CMAKE_${LANG}_COMPILER_VERSION VERSION_GREATER_EQUAL "7.0")
+    elseif((CMAKE_${LANG}_COMPILER_ID STREQUAL "AppleClang"
+      AND CMAKE_${LANG}_COMPILER_VERSION VERSION_GREATER_EQUAL "7.0") OR
+      (CMAKE_${LANG}_COMPILER_ID STREQUAL "Clang" AND APPLE))
 
       # Check for separate OpenMP library on AppleClang 7+
       find_library(OpenMP_libomp_LIBRARY
@@ -434,6 +455,8 @@ endfunction()
 
 macro(_OPENMP_SET_VERSION_BY_SPEC_DATE LANG)
   set(OpenMP_SPEC_DATE_MAP
+    "202111=5.2"
+    "202011=5.1"
     # Preview versions
     "201611=5.0" # OpenMP 5.0 preview 1
     # Combined versions, 2.5 onwards
@@ -600,15 +623,13 @@ foreach(LANG IN LISTS OpenMP_FINDLIST)
         add_library(OpenMP::OpenMP_${LANG} INTERFACE IMPORTED)
       endif()
       if(OpenMP_${LANG}_FLAGS)
-        separate_arguments(_OpenMP_${LANG}_OPTIONS NATIVE_COMMAND "${OpenMP_${LANG}_FLAGS}")
         set_property(TARGET OpenMP::OpenMP_${LANG} PROPERTY
-          INTERFACE_COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:${LANG}>:${_OpenMP_${LANG}_OPTIONS}>")
+          INTERFACE_COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:${LANG}>:SHELL:${OpenMP_${LANG}_FLAGS}>")
         if(CMAKE_${LANG}_COMPILER_ID STREQUAL "Fujitsu"
           OR ${CMAKE_${LANG}_COMPILER_ID} STREQUAL "IntelLLVM")
           set_property(TARGET OpenMP::OpenMP_${LANG} PROPERTY
-            INTERFACE_LINK_OPTIONS "${OpenMP_${LANG}_FLAGS}")
+            INTERFACE_LINK_OPTIONS "SHELL:${OpenMP_${LANG}_FLAGS}")
         endif()
-        unset(_OpenMP_${LANG}_OPTIONS)
       endif()
       if(OpenMP_${LANG}_INCLUDE_DIRS)
         set_property(TARGET OpenMP::OpenMP_${LANG} PROPERTY

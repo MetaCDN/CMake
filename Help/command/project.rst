@@ -105,6 +105,9 @@ The options are:
 
 .. include:: SUPPORTED_LANGUAGES.txt
 
+By default ``C`` and ``CXX`` are enabled if no language options are given.
+Specify language ``NONE``, or use the ``LANGUAGES`` keyword and list no languages,
+to skip enabling any languages.
 
 The variables set through the ``VERSION``, ``DESCRIPTION`` and ``HOMEPAGE_URL``
 options are intended for use as default values in package metadata and documentation.
@@ -120,12 +123,12 @@ The following outlines the steps performed during a ``project()`` call:
 
 * .. versionadded:: 3.15
     For every ``project()`` call regardless of the project
-    name, include the file named by :variable:`CMAKE_PROJECT_INCLUDE_BEFORE`,
-    if set.
+    name, include the file(s) and module(s) named by
+    :variable:`CMAKE_PROJECT_INCLUDE_BEFORE`, if set.
 
 * .. versionadded:: 3.17
     If the ``project()`` command specifies ``<PROJECT-NAME>`` as its project
-    name, include the file named by
+    name, include the file(s) and module(s) named by
     :variable:`CMAKE_PROJECT_<PROJECT-NAME>_INCLUDE_BEFORE`, if set.
 
 * Set the various project-specific variables detailed in the `Synopsis`_
@@ -153,11 +156,11 @@ The following outlines the steps performed during a ``project()`` call:
 
 * .. versionadded:: 3.15
     For every ``project()`` call regardless of the project
-    name, include the file named by :variable:`CMAKE_PROJECT_INCLUDE`,
-    if set.
+    name, include the file(s) and module(s) named by
+    :variable:`CMAKE_PROJECT_INCLUDE`, if set.
 
 * If the ``project()`` command specifies ``<PROJECT-NAME>`` as its project
-  name, include the file named by
+  name, include the file(s) and module(s) named by
   :variable:`CMAKE_PROJECT_<PROJECT-NAME>_INCLUDE`, if set.
 
 Usage

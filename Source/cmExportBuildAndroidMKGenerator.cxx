@@ -2,6 +2,7 @@
    file Copyright.txt or https://cmake.org/licensing for details.  */
 #include "cmExportBuildAndroidMKGenerator.h"
 
+#include <map>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -10,6 +11,7 @@
 
 #include "cmGeneratorTarget.h"
 #include "cmLinkItem.h"
+#include "cmList.h"
 #include "cmMakefile.h"
 #include "cmMessageType.h"
 #include "cmPolicies.h"
@@ -55,8 +57,8 @@ void cmExportBuildAndroidMKGenerator::GenerateImportTargetCode(
 }
 
 void cmExportBuildAndroidMKGenerator::GenerateImportPropertyCode(
-  std::ostream&, const std::string&, cmGeneratorTarget const*,
-  ImportPropertyMap const&)
+  std::ostream&, const std::string&, const std::string&,
+  cmGeneratorTarget const*, ImportPropertyMap const&, const std::string&)
 {
 }
 
@@ -107,8 +109,8 @@ void cmExportBuildAndroidMKGenerator::GenerateInterfaceProperties(
         std::string sharedLibs;
         std::string ldlibs;
         cmLinkInterfaceLibraries const* linkIFace =
-          target->GetLinkInterfaceLibraries(
-            config, target, cmGeneratorTarget::LinkInterfaceFor::Link);
+          target->GetLinkInterfaceLibraries(config, target,
+                                            cmGeneratorTarget::UseTo::Link);
         for (cmLinkItem const& item : linkIFace->Libraries) {
           cmGeneratorTarget const* gt = item.Target;
           std::string const& lib = item.AsStr();
@@ -148,7 +150,7 @@ void cmExportBuildAndroidMKGenerator::GenerateInterfaceProperties(
         }
       } else if (property.first == "INTERFACE_INCLUDE_DIRECTORIES") {
         std::string includes = property.second;
-        std::vector<std::string> includeList = cmExpandedList(includes);
+        cmList includeList{ includes };
         os << "LOCAL_EXPORT_C_INCLUDES := ";
         std::string end;
         for (std::string const& i : includeList) {
@@ -158,9 +160,8 @@ void cmExportBuildAndroidMKGenerator::GenerateInterfaceProperties(
         os << "\n";
       } else if (property.first == "INTERFACE_LINK_OPTIONS") {
         os << "LOCAL_EXPORT_LDFLAGS := ";
-        std::vector<std::string> linkFlagsList =
-          cmExpandedList(property.second);
-        os << cmJoin(linkFlagsList, " ") << "\n";
+        cmList linkFlagsList{ property.second };
+        os << linkFlagsList.join(" ") << "\n";
       } else {
         os << "# " << property.first << " " << (property.second) << "\n";
       }
@@ -169,8 +170,8 @@ void cmExportBuildAndroidMKGenerator::GenerateInterfaceProperties(
 
   // Tell the NDK build system if prebuilt static libraries use C++.
   if (target->GetType() == cmStateEnums::STATIC_LIBRARY) {
-    cmLinkImplementation const* li = target->GetLinkImplementation(
-      config, cmGeneratorTarget::LinkInterfaceFor::Link);
+    cmLinkImplementation const* li =
+      target->GetLinkImplementation(config, cmGeneratorTarget::UseTo::Link);
     if (cm::contains(li->Languages, "CXX")) {
       os << "LOCAL_HAS_CPP := true\n";
     }

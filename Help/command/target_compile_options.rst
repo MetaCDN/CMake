@@ -15,6 +15,11 @@ are used when compiling the given ``<target>``, which must have been
 created by a command such as :command:`add_executable` or
 :command:`add_library` and must not be an :ref:`ALIAS target <Alias Targets>`.
 
+.. note::
+
+  These options are not used when linking the target.
+  See the :command:`target_link_options` command for that.
+
 Arguments
 ^^^^^^^^^
 
@@ -23,7 +28,7 @@ instead of being appended.  See policy :policy:`CMP0101` which affects
 whether ``BEFORE`` will be ignored in certain cases.
 
 The ``INTERFACE``, ``PUBLIC`` and ``PRIVATE`` keywords are required to
-specify the :ref:`scope <Target Usage Requirements>` of the following arguments.
+specify the :ref:`scope <Target Command Scope>` of the following arguments.
 ``PRIVATE`` and ``PUBLIC`` items will populate the :prop_tgt:`COMPILE_OPTIONS`
 property of ``<target>``.  ``PUBLIC`` and ``INTERFACE`` items will populate the
 :prop_tgt:`INTERFACE_COMPILE_OPTIONS` property of ``<target>``.
@@ -50,9 +55,17 @@ See Also
 
 * For file-specific settings, there is the source file property :prop_sf:`COMPILE_OPTIONS`.
 
+* This command adds compile options for all languages in a target.
+  Use the :genex:`COMPILE_LANGUAGE` generator expression to specify
+  per-language compile options.
+
 * :command:`target_compile_features`
 * :command:`target_link_libraries`
 * :command:`target_link_directories`
 * :command:`target_link_options`
 * :command:`target_precompile_headers`
 * :command:`target_sources`
+
+* :variable:`CMAKE_<LANG>_FLAGS` and :variable:`CMAKE_<LANG>_FLAGS_<CONFIG>`
+  add language-wide flags passed to all invocations of the compiler.
+  This includes invocations that drive compiling and those that drive linking.

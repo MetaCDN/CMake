@@ -66,6 +66,12 @@ Each ``<item>`` may be:
   :ref:`usage requirement <Target Usage Requirements>`.  This has the same
   effect as passing the framework directory as an include directory.
 
+  .. versionadded:: 3.28
+
+    The library file may point to a ``.xcframework`` folder on Apple platforms.
+    If it does, the target will get the selected library's ``Headers``
+    directory as a usage requirement.
+
   .. versionadded:: 3.8
     On :ref:`Visual Studio Generators` for VS 2010 and above, library files
     ending in ``.targets`` will be treated as MSBuild targets files and
@@ -147,7 +153,7 @@ Libraries for a Target and/or its Dependents
                        [<PRIVATE|PUBLIC|INTERFACE> <item>...]...)
 
 The ``PUBLIC``, ``PRIVATE`` and ``INTERFACE``
-:ref:`scope <Target Usage Requirements>` keywords can be used to
+:ref:`scope <Target Command Scope>` keywords can be used to
 specify both the link dependencies and the link interface in one command.
 
 Libraries and targets following ``PUBLIC`` are linked to, and are made

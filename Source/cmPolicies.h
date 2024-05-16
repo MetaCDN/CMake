@@ -294,8 +294,8 @@ class cmMakefile;
          "FindFLEX runs flex in CMAKE_CURRENT_BINARY_DIR when executing.", 3, \
          17, 0, cmPolicies::WARN)                                             \
   SELECT(POLICY, CMP0099,                                                     \
-         "Link properties are transitive over private dependency on static "  \
-         "libraries.",                                                        \
+         "Link properties are transitive over private dependencies of "       \
+         "static libraries.",                                                 \
          3, 17, 0, cmPolicies::WARN)                                          \
   SELECT(POLICY, CMP0100, "Let AUTOMOC and AUTOUIC process .hh files.", 3,    \
          17, 0, cmPolicies::WARN)                                             \
@@ -349,10 +349,10 @@ class cmMakefile;
   SELECT(POLICY, CMP0117,                                                     \
          "MSVC RTTI flag /GR is not added to CMAKE_CXX_FLAGS by default.", 3, \
          20, 0, cmPolicies::WARN)                                             \
-  SELECT(                                                                     \
-    POLICY, CMP0118,                                                          \
-    "The GENERATED source file property is now visible in all directories.",  \
-    3, 20, 0, cmPolicies::WARN)                                               \
+  SELECT(POLICY, CMP0118,                                                     \
+         "GENERATED sources may be used across directories without manual "   \
+         "marking.",                                                          \
+         3, 20, 0, cmPolicies::WARN)                                          \
   SELECT(POLICY, CMP0119,                                                     \
          "LANGUAGE source file property explicitly compiles as specified "    \
          "language.",                                                         \
@@ -406,8 +406,8 @@ class cmMakefile;
          "is not usable.",                                                    \
          3, 24, 0, cmPolicies::WARN)                                          \
   SELECT(POLICY, CMP0135,                                                     \
-         "ExternalProject ignores timestamps in archives by default for the " \
-         "URL download method",                                               \
+         "ExternalProject and FetchContent ignore timestamps in archives by " \
+         "default for the URL download method",                               \
          3, 24, 0, cmPolicies::WARN)                                          \
   SELECT(POLICY, CMP0136,                                                     \
          "Watcom runtime library flags are selected by an abstraction.", 3,   \
@@ -434,6 +434,86 @@ class cmMakefile;
          3, 25, 0, cmPolicies::WARN)                                          \
   SELECT(POLICY, CMP0143,                                                     \
          "Global property USE_FOLDERS treated as ON by default", 3, 26, 0,    \
+         cmPolicies::WARN)                                                    \
+  SELECT(POLICY, CMP0144,                                                     \
+         "find_package uses upper-case <PACKAGENAME>_ROOT variables.", 3, 27, \
+         0, cmPolicies::WARN)                                                 \
+  SELECT(POLICY, CMP0145, "The Dart and FindDart modules are removed.", 3,    \
+         27, 0, cmPolicies::WARN)                                             \
+  SELECT(POLICY, CMP0146, "The FindCUDA module is removed.", 3, 27, 0,        \
+         cmPolicies::WARN)                                                    \
+  SELECT(POLICY, CMP0147,                                                     \
+         "Visual Studio generators build custom commands in parallel.", 3,    \
+         27, 0, cmPolicies::WARN)                                             \
+  SELECT(POLICY, CMP0148,                                                     \
+         "The FindPythonInterp and FindPythonLibs modules are removed.", 3,   \
+         27, 0, cmPolicies::WARN)                                             \
+  SELECT(POLICY, CMP0149,                                                     \
+         "Visual Studio generators select latest Windows SDK by default.", 3, \
+         27, 0, cmPolicies::WARN)                                             \
+  SELECT(POLICY, CMP0150,                                                     \
+         "ExternalProject_Add and FetchContent_Declare commands "             \
+         "treat relative GIT_REPOSITORY paths as being relative "             \
+         "to the parent project's remote.",                                   \
+         3, 27, 0, cmPolicies::WARN)                                          \
+  SELECT(POLICY, CMP0151,                                                     \
+         "AUTOMOC include directory is a system include directory by "        \
+         "default.",                                                          \
+         3, 27, 0, cmPolicies::WARN)                                          \
+  SELECT(                                                                     \
+    POLICY, CMP0152,                                                          \
+    "file(REAL_PATH) resolves symlinks before collapsing ../ components.", 3, \
+    28, 0, cmPolicies::WARN)                                                  \
+  SELECT(POLICY, CMP0153, "The exec_program command should not be called.",   \
+         3, 28, 0, cmPolicies::WARN)                                          \
+  SELECT(                                                                     \
+    POLICY, CMP0154,                                                          \
+    "Generated files are private by default in targets using file sets.", 3,  \
+    28, 0, cmPolicies::WARN)                                                  \
+  SELECT(POLICY, CMP0155,                                                     \
+         "C++ sources in targets with at least C++20 are scanned for "        \
+         "imports when supported.",                                           \
+         3, 28, 0, cmPolicies::WARN)                                          \
+  SELECT(                                                                     \
+    POLICY, CMP0156,                                                          \
+    "De-duplicate libraries on link lines based on linker capabilities.", 3,  \
+    29, 0, cmPolicies::WARN)                                                  \
+  SELECT(POLICY, CMP0157,                                                     \
+         "Swift compilation mode selected by an abstraction.", 3, 29, 0,      \
+         cmPolicies::WARN)                                                    \
+  SELECT(POLICY, CMP0158,                                                     \
+         "add_test() honors CMAKE_CROSSCOMPILING_EMULATOR only when "         \
+         "cross-compiling.",                                                  \
+         3, 29, 0, cmPolicies::WARN)                                          \
+  SELECT(POLICY, CMP0159,                                                     \
+         "file(STRINGS) with REGEX updates CMAKE_MATCH_<n>.", 3, 29, 0,       \
+         cmPolicies::WARN)                                                    \
+  SELECT(                                                                     \
+    POLICY, CMP0160,                                                          \
+    "More read-only target properties now error when trying to set them.", 3, \
+    29, 0, cmPolicies::WARN)                                                  \
+  SELECT(POLICY, CMP0161, "CPACK_PRODUCTBUILD_DOMAINS defaults to true.", 3,  \
+         29, 0, cmPolicies::WARN)                                             \
+  SELECT(                                                                     \
+    POLICY, CMP0162,                                                          \
+    "Visual Studio generators add UseDebugLibraries indicators by default.",  \
+    3, 30, 0, cmPolicies::WARN)                                               \
+  SELECT(                                                                     \
+    POLICY, CMP0163,                                                          \
+    "The GENERATED source file property is now visible in all directories.",  \
+    3, 30, 0, cmPolicies::WARN)                                               \
+  SELECT(POLICY, CMP0164,                                                     \
+         "add_library() rejects SHARED libraries when not supported by the "  \
+         "platform.",                                                         \
+         3, 30, 0, cmPolicies::WARN)                                          \
+  SELECT(POLICY, CMP0165,                                                     \
+         "enable_language() must not be called before project().", 3, 30, 0,  \
+         cmPolicies::WARN)                                                    \
+  SELECT(POLICY, CMP0166,                                                     \
+         "TARGET_PROPERTY evaluates link properties transitively over "       \
+         "private dependencies of static libraries.",                         \
+         3, 30, 0, cmPolicies::WARN)                                          \
+  SELECT(POLICY, CMP0167, "The FindBoost module is removed.", 3, 30, 0,       \
          cmPolicies::WARN)
 
 #define CM_SELECT_ID(F, A1, A2, A3, A4, A5, A6) F(A1)
@@ -472,7 +552,17 @@ class cmMakefile;
   F(CMP0113)                                                                  \
   F(CMP0119)                                                                  \
   F(CMP0131)                                                                  \
-  F(CMP0142)
+  F(CMP0142)                                                                  \
+  F(CMP0154)                                                                  \
+  F(CMP0155)                                                                  \
+  F(CMP0156)                                                                  \
+  F(CMP0157)                                                                  \
+  F(CMP0160)                                                                  \
+  F(CMP0162)
+
+#define CM_FOR_EACH_CUSTOM_COMMAND_POLICY(F)                                  \
+  F(CMP0116)                                                                  \
+  F(CMP0147)
 
 /** \class cmPolicies
  * \brief Handles changes in CMake behavior and policies

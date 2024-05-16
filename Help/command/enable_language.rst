@@ -9,19 +9,19 @@ Enable languages (CXX/C/OBJC/OBJCXX/Fortran/etc)
 
 Enables support for the named languages in CMake.  This is the same as
 the :command:`project` command but does not create any of the extra
-variables that are created by the project command.
+variables that are created by the :command:`project` command.
 
 .. include:: SUPPORTED_LANGUAGES.txt
 
-By default ``C`` and ``CXX`` are enabled if no language options are given.
-Specify language ``NONE``, or use the ``LANGUAGES`` keyword and list no languages,
-to skip enabling any languages.
+The following restrictions apply to where ``enable_language()`` may be called:
 
-This command must be called in file scope, not in a function call.
-Furthermore, it must be called in the highest directory common to all
-targets using the named language directly for compiling sources or
-indirectly through link dependencies.  It is simplest to enable all
-needed languages in the top-level directory of a project.
+* It must be called in file scope, not in a function call.
+* It must not be called before the first call to :command:`project`.
+  See policy :policy:`CMP0165`.
+* It must be called in the highest directory common to all targets
+  using the named language directly for compiling sources or
+  indirectly through link dependencies.  It is simplest to enable all
+  needed languages in the top-level directory of a project.
 
 The ``OPTIONAL`` keyword is a placeholder for future implementation and
 does not currently work. Instead you can use the :module:`CheckLanguage`

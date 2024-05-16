@@ -14,133 +14,48 @@ When used, a warning will be generated to indicate that an experimental
 feature is in use and that the affected behavior in the project is not part of
 CMake's stability guarantees.
 
-C++20 Module APIs
-=================
+Export Package Dependencies
+===========================
 
-Variable: ``CMAKE_EXPERIMENTAL_CXX_MODULE_CMAKE_API``
-Value: ``2182bf5c-ef0d-489a-91da-49dbc3090d2a``
+In order to activate support for this experimental feature, set
 
-In order to support C++20 modules, there are a number of behaviors that have
-CMake APIs to provide the required features to build and export them from a
-project.
+* variable ``CMAKE_EXPERIMENTAL_EXPORT_PACKAGE_DEPENDENCIES`` to
+* value ``1942b4fa-b2c5-4546-9385-83f254070067``.
 
-Limitations
------------
+This UUID may change in future versions of CMake.  Be sure to use the value
+documented here by the source tree of the version of CMake with which you are
+experimenting.
 
-There are a number of known limitations of the current C++20 module support in
-CMake.  This does not document known limitations or bugs in compilers as these
-can change over time.
+When activated, this experimental feature provides the following:
 
-For all generators:
+* The ``install(EXPORT)`` and ``export(EXPORT)`` commands have experimental
+  ``EXPORT_PACKAGE_DEPENDENCIES`` arguments to generate ``find_dependency``
+  calls automatically.
 
-- Only in-project modules may be used.  While there is some support for
-  exporting module information, there is no mechanism for using it at the
-  moment.
+* Details of the calls may be configured using the ``export(SETUP)``
+  command's ``PACKAGE_DEPENDENCY`` argument.
 
-For the Ninja Generators:
+* The package name associated with specific targets may be specified
+  using the ``CMAKE_EXPORT_FIND_PACKAGE_NAME`` variable and/or
+``EXPORT_FIND_PACKAGE_NAME`` target property.
 
-- ``ninja`` 1.10 or newer is required.
+C++ ``import std`` support
+==========================
 
-For the Visual Studio Generators:
+In order to activate support for ``import std`` in C++23 and newer targets,
+set
 
-- Only Visual Studio 2022 and toolchains newer than 19.34 (Visual Studio
-  17.4).
-- No support for exporting or installing BMI or module information.
-- No diagnosis of using modules provided by ``PRIVATE`` sources from
-  ``PUBLIC`` module sources.
+* variable ``CMAKE_EXPERIMENTAL_CXX_IMPORT_STD`` to
+* value ``0e5b6991-d74f-4b3d-a41c-cf096e0b2508``.
 
-C++20 Module Dependencies
-=========================
+This UUID may change in future versions of CMake.  Be sure to use the value
+documented here by the source tree of the version of CMake with which you are
+experimenting.
 
-The Ninja generator has experimental infrastructure supporting C++20 module
-dependency scanning.  This is similar to the Fortran modules support, but
-relies on external tools to scan C++20 translation units for module
-dependencies.  The approach is described by Kitware's `D1483r1`_ paper.
+When activated, this experimental feature provides the following:
 
-In order to activate CMake's experimental support for C++20 module
-dependencies, set the following variables:
+* The :prop_tgt:`CXX_MODULE_STD` target property and its initializing variable
+  :variable:`CMAKE_CXX_MODULE_STD`.
 
-``CMAKE_EXPERIMENTAL_CXX_MODULE_CMAKE_API``
-  Set this to the UUID documented above.
-
-``CMAKE_EXPERIMENTAL_CXX_MODULE_DYNDEP``
-  Set this to ``1`` in order to activate this undocumented experimental
-  infrastructure.  This is **intended to make the functionality available
-  to compiler writers** so they can use it to develop and test their
-  dependency scanning tool.
-
-Some compilers already have support for module dependency scanning:
-
-* MSVC 19.34 and newer (provided with Visual Studio 17.4 and newer)
-* LLVM/Clang 16.0 and newer
-
-For those, only the above variables need to be set by project code.
-For compilers with in-development support, additional variables must
-be set as follows.
-
-``CMAKE_EXPERIMENTAL_CXX_SCANDEP_SOURCE``
-  Set this to tell CMake how to invoke the C++20 module dependency
-  scanning tool.
-
-``CMAKE_EXPERIMENTAL_CXX_MODULE_MAP_FORMAT``
-  Set this for compilers that generate module maps.  See below.
-
-``CMAKE_EXPERIMENTAL_CXX_MODULE_MAP_FLAG``
-  Set this for compilers that generate module maps.  See below.
-
-For example, add code like the following to a test project:
-
-.. code-block:: cmake
-
-  set(CMAKE_EXPERIMENTAL_CXX_MODULE_DYNDEP 1)
-  string(CONCAT CMAKE_EXPERIMENTAL_CXX_SCANDEP_SOURCE
-    "<CMAKE_CXX_COMPILER> <DEFINES> <INCLUDES> <FLAGS> <SOURCE>"
-    " -MT <DYNDEP_FILE> -MD -MF <DEP_FILE>"
-    " ${flags_to_scan_deps} -fdep-file=<DYNDEP_FILE> -fdep-output=<OBJECT>"
-    )
-
-The tool specified by ``CMAKE_EXPERIMENTAL_CXX_SCANDEP_SOURCE`` is
-expected to process the translation unit, write preprocessor dependencies
-to the file specified by the ``<DEP_FILE>`` placeholder, and write module
-dependencies to the file specified by the ``<DYNDEP_FILE>`` placeholder. The
-``CMAKE_EXPERIMENTAL_CXX_SCANDEP_DEPFILE_FORMAT`` file may be set to ``msvc``
-for scandep rules which use ``msvc``-style dependency reporting.
-
-The module dependencies should be written in the format described
-by the `P1689r5`_ paper.
-
-Compiler writers may try out their scanning functionality using
-the `cxx-modules-sandbox`_ test project, modified to set variables
-as above for their compiler.
-
-For compilers that generate module maps, tell CMake as follows:
-
-.. code-block:: cmake
-
-  set(CMAKE_EXPERIMENTAL_CXX_MODULE_MAP_FORMAT "gcc")
-  set(CMAKE_EXPERIMENTAL_CXX_MODULE_MAP_FLAG
-    "${compiler_flags_for_module_map} -fmodule-mapper=<MODULE_MAP_FILE>")
-
-Currently, the only supported formats are, ``clang``, ``gcc``, and ``msvc``.
-The ``gcc`` format is described in the GCC documentation, but the relevant
-section for the purposes of CMake is:
-
-    A mapping file consisting of space-separated module-name, filename
-    pairs, one per line.  Only the mappings for the direct imports and any
-    module export name need be provided.  If other mappings are provided,
-    they override those stored in any imported CMI files.  A repository
-    root may be specified in the mapping file by using ``$root`` as the
-    module name in the first active line.
-
-    -- GCC module mapper documentation
-
-The ``msvc`` format is a response file containing flags required to compile
-any module interfaces properly as well as find any required files to satisfy
-``import`` statements as required for Microsoft's Visual Studio toolchains.
-
-Similarly, the ``clang`` format is a response file containing flags using
-Clang's module flags.
-
-.. _`D1483r1`: https://mathstuf.fedorapeople.org/fortran-modules/fortran-modules.html
-.. _`P1689r5`: http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2022/p1689r5.html
-.. _`cxx-modules-sandbox`: https://github.com/mathstuf/cxx-modules-sandbox
+* Targets with the property set to a true value and at least ``cxx_std_23``
+  may use ``import std;`` in any scanned C++ source file.

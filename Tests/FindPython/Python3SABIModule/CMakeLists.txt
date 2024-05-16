@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.15)
 
 project(TestPython3SABIModule LANGUAGES C)
 
@@ -35,12 +35,16 @@ if(NOT TARGET Python3::SABIModule)
   message(SEND_ERROR "Python3::SABIModule not found")
 endif()
 
+if (Python3_VERSION VERSION_GREATER_EQUAL "3.2" AND NOT Python3_SOSABI)
+  message(FATAL_ERROR "Python3_SOSABI unexpectedly not defined")
+endif()
+
 Python3_add_library (spam3 MODULE USE_SABI 3 WITH_SOABI ../spam.c)
 target_compile_definitions (spam3 PRIVATE PYTHON3)
 
 if (Python3_SOSABI)
   get_property (suffix TARGET spam3 PROPERTY SUFFIX)
-  if (NOT suffix MATCHES "^.${Python3_SOSABI}")
+  if (NOT suffix MATCHES "^\\.${Python3_SOSABI}")
     message(FATAL_ERROR "Module suffix do not include Python3_SOSABI")
   endif()
 endif()
@@ -48,4 +52,4 @@ endif()
 
 add_test (NAME python3_spam3
           COMMAND "${CMAKE_COMMAND}" -E env "PYTHONPATH=$<TARGET_FILE_DIR:spam3>"
-          "${Python3_EXECUTABLE}" -c "import spam3; spam3.system(\"cd\")")
+          "${Python3_INTERPRETER}" -c "import spam3; spam3.system(\"cd\")")
